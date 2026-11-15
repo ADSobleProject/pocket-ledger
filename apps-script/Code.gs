@@ -4,8 +4,10 @@
  * ============================================================================
  *
  *  "2026 가계부 (자동기록)" 스프레드시트에 붙여넣어 쓰는 백엔드입니다.
- *  · 읽기 : 예산, 월별요약, 결혼준비, 시트1 최근 거래
- *  · 쓰기 : 시트1 마지막 행에 새 거래 9칸 추가 (그 외 시트는 절대 건드리지 않음)
+ *  · 읽기 : 예산, 월별요약, 결혼준비, 시트1 최근 거래(행 번호 포함)
+ *  · 쓰기 : 시트1 새 거래 추가(append) · 기존 행 수정(update) · 행 삭제(delete)
+ *           그 외 시트(정제데이터·월별요약·대시보드·예산·결혼준비)는 절대 건드리지 않고,
+ *           수정할 때도 I열(메일ID)은 그대로 둡니다.
  *
  *  [설치 순서]
  *   1) 구글 시트 열기 → 확장 프로그램 → Apps Script
@@ -88,10 +90,15 @@ function doPost(e) {
   var action = String(body.action || 'append');
   try {
     if (action === 'append') return respond_(appendTransaction_(body), '');
+    if (action === 'update') return respond_(updateTransaction_(body), '');
+    if (action === 'delete') return respond_(deleteTransaction_(body), '');
     if (action === 'ping')   return respond_({ ok: true, data: { pong: true, serverTime: formatNow_('yyyy-MM-dd HH:mm:ss') } }, '');
     return respond_({ ok: false, error: { code: 'UNKNOWN_ACTION', message: '알 수 없는 action: ' + action } }, '');
   } catch (err) {
-    return respond_({ ok: false, error: { code: 'WRITE_FAILED', message: String(err && err.message || err) } }, '');
+    return respond_({
+      ok: false,
+      error: { code: String((err && err.code) || 'WRITE_FAILED'), message: String(err && err.message || err) }
+    }, '');
   }
 }
 
@@ -152,6 +159,169 @@ function appendTransaction_(body) {
   } finally {
     if (locked && lock) { try { lock.releaseLock(); } catch (e2) {} }
   }
+}
+
+// ── 쓰기: 시트1 기존 행 수정 (A~H만, I열 메일ID 보존) ──────────────────────
+function updateTransaction_(body) {
+  var row = toRow_(body.row);
+
+  var date     = normDate_(body.date);
+  var time     = normTime_(body.time);
+  var merchant = String(body.merchant == null ? '' : body.merchant).trim();
+  var type     = String(body.type || '출금').trim() === '입금' ? '입금' : '출금';
+  var amount   = toAmount_(body.amount);
+  var method   = String(body.method == null ? '' : body.method).trim() || '직접입력';
+  var category = String(body.category == null ? '' : body.category).trim();
+  var note     = applyWeddingTag_(body.note, body.isWedding === true);
+
+  if (!date)         throw scriptError_('BAD_DATE', '날짜 형식이 올바르지 않습니다 (yyyy-mm-dd).');
+  if (!merchant)     throw scriptError_('BAD_MERCHANT', '사용처를 입력해 주세요.');
+  if (!(amount > 0)) throw scriptError_('BAD_AMOUNT', '금액은 0보다 큰 숫자여야 합니다.');
+
+  if (CATEGORIES.indexOf(category) < 0) {
+    category = (type === '입금') ? '기타수입' : '기타지출';
+  }
+
+  var lock = lockOrNull_();
+  try {
+    var ss = getSS_();
+    var sh = mustSheet_(ss, SHEET_TX);
+    var lastRow = sh.getLastRow();
+
+    // 행이 실제로 존재하는지 확인 (다른 곳에서 지워졌거나 행이 밀린 경우 방어)
+    if (row > lastRow) {
+      throw scriptError_('ROW_OUT_OF_RANGE', row + '행이 시트 범위를 벗어났습니다. 새로고침 후 다시 시도해 주세요.');
+    }
+    var before = sh.getRange(row, 1, 1, 9).getValues()[0];
+    if (isBlankRow_(before)) {
+      throw scriptError_('ROW_EMPTY', row + '행이 비어 있습니다. 새로고침 후 다시 시도해 주세요.');
+    }
+
+    // 정확히 A~H 8칸만 씁니다. I열(메일ID)은 그대로 둡니다.
+    sh.getRange(row, 1, 1, 8).setValues([[
+      date, time, merchant, type, amount, method, category, note
+    ]]);
+
+    return {
+      ok: true,
+      data: {
+        row: row,
+        updated: {
+          date: date, time: time, merchant: merchant, type: type, amount: amount,
+          method: method, category: category, note: note, isWedding: body.isWedding === true,
+          mailId: String(before[8] == null ? '' : before[8]).trim()
+        },
+        previous: {
+          merchant: String(before[2] == null ? '' : before[2]).trim(),
+          amount: num_(before[4]) || 0,
+          note: String(before[7] == null ? '' : before[7]).trim()
+        }
+      }
+    };
+  } finally {
+    releaseLock_(lock);
+  }
+}
+
+// ── 쓰기: 시트1 기존 행 삭제 ────────────────────────────────────────────────
+function deleteTransaction_(body) {
+  var row = toRow_(body.row);
+  var expected = String(body.expectedMerchant == null ? '' : body.expectedMerchant).trim();
+
+  var lock = lockOrNull_();
+  try {
+    var ss = getSS_();
+    var sh = mustSheet_(ss, SHEET_TX);
+    var lastRow = sh.getLastRow();
+
+    if (row > lastRow) {
+      throw scriptError_('ROW_OUT_OF_RANGE', row + '행이 시트 범위를 벗어났습니다. 새로고침 후 다시 시도해 주세요.');
+    }
+    var before = sh.getRange(row, 1, 1, 9).getValues()[0];
+    if (isBlankRow_(before)) {
+      throw scriptError_('ROW_EMPTY', row + '행이 비어 있습니다. 새로고침 후 다시 시도해 주세요.');
+    }
+
+    var merchant = String(before[2] == null ? '' : before[2]).trim();
+    // 안전 장치: 앱이 보고 있던 사용처와 시트의 사용처가 다르면 삭제하지 않습니다.
+    if (expected && merchant !== expected) {
+      throw scriptError_('ROW_MISMATCH',
+        '시트 내용이 바뀌어 삭제하지 않았습니다. (앱: ' + expected + ' / 시트: ' + merchant +
+        ') 새로고침 후 다시 시도해 주세요.');
+    }
+
+    sh.deleteRow(row);
+
+    return {
+      ok: true,
+      data: {
+        row: row,
+        deleted: {
+          date: dateStr_(before[0]), time: timeStr_(before[1]), merchant: merchant,
+          type: String(before[3] || '출금').trim() === '입금' ? '입금' : '출금',
+          amount: num_(before[4]) || 0,
+          method: String(before[5] == null ? '' : before[5]).trim(),
+          category: String(before[6] == null ? '' : before[6]).trim(),
+          note: String(before[7] == null ? '' : before[7]).trim()
+        }
+      }
+    };
+  } finally {
+    releaseLock_(lock);
+  }
+}
+
+// ── 쓰기 보조 ───────────────────────────────────────────────────────────────
+function toRow_(v) {
+  var row = Number(v);
+  if (!isFinite(row) || Math.floor(row) !== row || row < 2) {
+    throw scriptError_('INVALID_ROW', '행 번호가 올바르지 않습니다. (2 이상의 정수)');
+  }
+  return row;
+}
+
+function isBlankRow_(vals) {
+  if (!vals) return true;
+  var merchant = String(vals[2] == null ? '' : vals[2]).trim();
+  var amount = num_(vals[4]);
+  var date = dateStr_(vals[0]);
+  return !merchant && !amount && !date;
+}
+
+function scriptError_(code, message) {
+  var err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+function lockOrNull_() {
+  try {
+    var lock = LockService.getDocumentLock();
+    if (!lock) return null;
+    return lock.tryLock(20000) ? lock : null; // 잠금을 못 잡아도 쓰기는 계속합니다
+  } catch (e) {
+    return null; // 독립 스크립트 등 잠금을 쓸 수 없는 환경
+  }
+}
+
+function releaseLock_(lock) {
+  if (!lock) return;
+  try { lock.releaseLock(); } catch (e) {}
+}
+
+function applyWeddingTag_(note, isWedding) {
+  var cleaned = stripWeddingTags_(note);
+  if (!isWedding) return cleaned;
+  return (WEDDING_TAG + ' ' + cleaned).trim();
+}
+
+function stripWeddingTags_(note) {
+  var s = String(note == null ? '' : note)
+    .replace(/#결혼준비/g, ' ')
+    .replace(/#제외/g, ' ')
+    .replace(/[\s\u00A0]+/g, ' ')
+    .trim();
+  return s.replace(/^[·,\-:;|]+ ?/, '').trim(); // 태그만 지운 자리에 남은 구분자 정리
 }
 
 // ── 읽기: 예산 ──────────────────────────────────────────────────────────────
@@ -371,6 +541,7 @@ function readTransactions_(ss, limit) {
     var amount = num_(vals[i][4]);
     if (!merchant && !amount) continue;
     out.push({
+      row: i + 2, // 시트1의 실제 행 번호 (1-based, 헤더가 1행)
       date: dateStr_(vals[i][0]),
       time: timeStr_(vals[i][1]),
       merchant: merchant,

@@ -8,6 +8,7 @@
 - 📱 폰에서 앱처럼 설치 (PWA · 홈 화면 추가)
 - 🔒 시트 ID·비밀번호를 코드에 저장하지 않음 — 앱 첫 화면에서 **웹 앱 URL + PIN** 을 입력하면 이 기기에만 저장됩니다
 - ✍️ 입력은 `시트1` 마지막 행에 한 줄 추가하는 것뿐, 수식 탭은 건드리지 않습니다
+- ✏️ 내역을 탭하면 **수정 · 삭제** — 그 행의 A~H열만 고치고 메일ID(I열)는 보존합니다
 - 💍 결혼준비 지출은 따로 모아 생활비 집계에서 제외
 
 ```
@@ -18,8 +19,12 @@
 ├── manifest.json         # PWA 매니페스트
 ├── sw.js                 # 오프라인 셸 캐시 (데이터는 캐시하지 않음)
 ├── icons/                # 앱 아이콘
-└── apps-script/
-    └── Code.gs           # 구글 시트에 붙여넣는 백엔드
+├── apps-script/
+│   └── Code.gs           # 구글 시트에 붙여넣는 백엔드
+└── tests/
+    ├── run_tests.py       # Code.gs 단위 테스트 러너 (quickjs)
+    ├── mock_env.js        # 스프레드시트·LockService 모의 환경
+    └── code_gs_test.js    # update/delete · 방어 로직 테스트
 ```
 
 ## 1. 백엔드 붙이기 (5분)
@@ -58,7 +63,7 @@
     "budget": { "period": {...}, "rows": [...], "total": {...} },
     "monthly": [{ "month": "2026-11", "income": 0, "expense": 0, "net": 0, "rate": 0, "count": 0 }],
     "wedding": { "summary": { "spend": 0, "refund": 0, "net": 0, "count": 0 }, "rows": [...] },
-    "transactions": [{ "date": "2026-11-15", "time": "12:30", "merchant": "...", "type": "출금", "amount": 12000, "method": "...", "category": "식사", "note": "", "mailId": "..." }]
+    "transactions": [{ "row": 12, "date": "2026-11-15", "time": "12:30", "merchant": "...", "type": "출금", "amount": 12000, "method": "...", "category": "식사", "note": "", "mailId": "..." }]
   }
 }
 ```
@@ -75,6 +80,37 @@
 ```
 
 `isWedding: true` 이면 비고에 `#결혼준비 #제외` 가 자동으로 붙고, 메일ID 는 `webapp-<timestamp>` 로 기록됩니다.
+
+**POST · 수정** — `row` 는 GET 으로 받은 거래의 `row`(시트1의 실제 행 번호)입니다.
+
+```json
+{
+  "pin": "1234", "action": "update", "row": 12,
+  "date": "2026-11-15", "time": "12:30", "merchant": "스타벅스 전주점",
+  "type": "출금", "amount": 5900, "method": "토스",
+  "category": "카페/간식", "note": "", "isWedding": false
+}
+```
+
+A~H열만 다시 쓰고 I열(메일ID)은 그대로 둡니다. `isWedding: true` 면 비고에 태그를 붙이고,
+`false` 면 `#결혼준비` · `#제외` 태그를 지웁니다. 행이 시트 범위를 벗어나거나 비어 있으면
+`ROW_OUT_OF_RANGE` / `ROW_EMPTY` 로 거절합니다.
+
+**POST · 삭제**
+
+```json
+{ "pin": "1234", "action": "delete", "row": 12, "expectedMerchant": "스타벅스 전주점" }
+```
+
+`expectedMerchant` 를 함께 보내면 그 행의 사용처가 일치할 때만 지웁니다.
+시트가 그 사이에 바뀌었으면 `ROW_MISMATCH` 로 막고 새로고침을 안내합니다(삭제 사고 방지).
+
+## 4. 테스트
+
+```bash
+pip install quickjs
+python3 tests/run_tests.py      # 27개 검사 — update/delete/방어/다른 시트 무접촉
+```
 
 ## 참고
 

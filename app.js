@@ -555,13 +555,16 @@
   function txRowHTML(t) {
     var isIn = t.type === '입금';
     var w = isWeddingTx(t);
+    var row = Number(t.row);
+    var tappable = isFinite(row) && row >= 2; // 시트1의 실제 행 번호가 있을 때만 수정 가능
     var meta = [];
     if (t.category) meta.push(esc(t.category));
     if (t.method) meta.push(esc(t.method));
     if (t.time) meta.push(esc(t.time));
-    var note = String(t.note || '').replace(/#결혼준비/g, '').replace(/#제외/g, '').trim();
+    var note = stripWeddingNote(t.note);
     if (note) meta.push(esc(note.length > 14 ? note.slice(0, 14) + '…' : note));
-    return '<div class="tx">' +
+
+    var inner =
       '<div class="tx__icon">' + (w ? '💍' : (CAT_ICON[t.category] || '🧾')) + '</div>' +
       '<div class="tx__body">' +
       '<div class="tx__name">' + (w ? '<span class="tx__tag">결혼</span>' : '') + esc(t.merchant || '이름 없음') + '</div>' +
@@ -569,8 +572,12 @@
       '</div>' +
       '<div class="tx__amt num' + (isIn ? ' tx__amt--in' : '') + '">' +
       (isIn ? '+' : '−') + numFmt.format(Math.round(n(t.amount))) +
-      '</div>' +
       '</div>';
+
+    if (!tappable) return '<div class="tx">' + inner + '</div>';
+    return '<button class="tx tx--tap" type="button" data-txrow="' + row + '" ' +
+      'aria-label="' + esc((t.merchant || '내역') + ' ' + numFmt.format(Math.round(n(t.amount))) + '원 수정 또는 삭제') + '">' +
+      inner + '</button>';
   }
 
   function emptyHTML(icon, title, desc) {
@@ -936,6 +943,12 @@
     if (state.tab === 'list') bindList();
     if (state.tab === 'add') bindAdd();
 
+    qsa('[data-txrow]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        openEditSheet(Number(el.getAttribute('data-txrow')));
+      });
+    });
+
     var gauge = $('gaugeFill');
     if (gauge) {
       var target = Math.max(0, Math.min(100, budgetView().rate));
@@ -1058,6 +1071,381 @@
     if (save) save.addEventListener('click', saveTransaction);
   }
 
+  /* ── 내역 수정 · 삭제 ─────────────────────────────────────────────────── */
+  var edit = null; // 수정 중인 내역 상태
+
+  function stripWeddingNote(note) {
+    return String(note == null ? '' : note)
+      .replace(/#결혼준비/g, ' ')
+      .replace(/#제외/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^[·,\-:;|]+ ?/, '')
+      .trim();
+  }
+
+  function txByRow(row) {
+    var tx = (state.data && state.data.transactions) || [];
+    for (var i = 0; i < tx.length; i++) {
+      if (Number(tx[i].row) === Number(row)) return tx[i];
+    }
+    return null;
+  }
+
+  function openEditSheet(row) {
+    var t = txByRow(row);
+    if (!t) {
+      toast('그 내역을 찾지 못했어요. ↻ 새로고침 후 다시 시도해 주세요.');
+      return;
+    }
+    var m = String(t.method || '');
+    var known = METHODS.indexOf(m) >= 0;
+    edit = {
+      row: Number(t.row),
+      date: String(t.date || '').slice(0, 10) || todayISO(),
+      time: String(t.time || '') || nowHM(),
+      type: t.type === '입금' ? '입금' : '출금',
+      merchant: String(t.merchant || ''),
+      amountRaw: String(Math.abs(Math.round(n(t.amount))) || ''),
+      method: known ? m : (m ? '__custom' : METHODS[0]),
+      methodCustom: known ? '' : m,
+      category: String(t.category || ''),
+      note: stripWeddingNote(t.note),
+      isWedding: isWeddingTx(t),
+      expectedMerchant: String(t.merchant || ''),
+      expectedAmount: Math.abs(Math.round(n(t.amount))),
+      busy: false
+    };
+    renderEditSheet();
+  }
+
+  function editSheetHTML() {
+    var e = edit;
+    var html = '';
+
+    html += '<h2 class="sheet__title">내역 수정</h2>';
+    html += '<p class="sheet__sub">시트1 <b>' + e.row + '행</b>을 고칩니다. 저장하면 구글 시트에 바로 반영됩니다.</p>';
+    html += '<div id="editError" class="formerr" hidden></div>';
+
+    html += '<div class="amount-box amount-box--sheet">' +
+      '<label class="amount-box__label" for="edAmount">금액</label>' +
+      '<input id="edAmount" class="amount-input" type="text" inputmode="numeric" autocomplete="off" ' +
+      'placeholder="0" value="' + esc(commaDigits(e.amountRaw)) + '">' +
+      '<div class="amount-quick">' +
+      '<button type="button" data-ed-add="10000">+1만</button>' +
+      '<button type="button" data-ed-add="50000">+5만</button>' +
+      '<button type="button" data-ed-add="100000">+10만</button>' +
+      '<button type="button" data-ed-clr>지우기</button>' +
+      '</div></div>';
+
+    html += '<div class="segmented" id="edSeg">' +
+      '<button type="button" data-ed-type="출금" class="' + (e.type === '출금' ? 'is-on' : '') + '">출금</button>' +
+      '<button type="button" data-ed-type="입금" class="' + (e.type === '입금' ? 'is-on' : '') + '">입금</button>' +
+      '</div>';
+
+    html += '<label class="field"><span class="field__label">사용처</span>' +
+      '<input id="edMerchant" class="input" type="text" placeholder="예) 스타벅스 전주점" autocomplete="off" ' +
+      'value="' + esc(e.merchant) + '"></label>';
+
+    html += '<div class="row2">' +
+      '<label class="field"><span class="field__label">날짜</span>' +
+      '<input id="edDate" class="input" type="date" value="' + esc(e.date) + '"></label>' +
+      '<label class="field"><span class="field__label">시각</span>' +
+      '<input id="edTime" class="input" type="time" value="' + esc(e.time) + '"></label>' +
+      '</div>';
+
+    html += '<div class="field" style="margin-bottom:6px"><span class="field__label">카테고리</span>' +
+      '<div class="chips" id="edCats">';
+    CATEGORIES.forEach(function (c) {
+      html += '<button class="chip' + (e.category === c ? ' is-on' : '') + '" type="button" data-ed-cat="' +
+        esc(c) + '">' + (CAT_ICON[c] || '') + ' ' + esc(c) + '</button>';
+    });
+    html += '</div></div>';
+
+    html += '<div class="field" style="margin:16px 0 0"><span class="field__label">결제수단</span>' +
+      '<div class="chips" id="edMethods">';
+    METHODS.forEach(function (m) {
+      html += '<button class="chip' + (e.method === m ? ' is-on' : '') + '" type="button" data-ed-method="' +
+        esc(m) + '">' + esc(m) + '</button>';
+    });
+    html += '<button class="chip' + (e.method === '__custom' ? ' is-on' : '') +
+      '" type="button" data-ed-method="__custom">직접입력</button>';
+    html += '</div>';
+    html += '<input id="edMethodCustom" class="input" type="text" placeholder="결제수단 이름" autocomplete="off" ' +
+      'style="margin-top:9px;' + (e.method === '__custom' ? '' : 'display:none') + '" value="' + esc(e.methodCustom) + '">';
+    html += '</div>';
+
+    html += '<div class="switchrow" style="margin-top:18px">' +
+      '<div><div class="switchrow__t">💍 결혼준비 지출</div>' +
+      '<div class="switchrow__d">생활비 집계에서 빼고 결혼준비로 따로 모읍니다</div></div>' +
+      '<button class="switch' + (e.isWedding ? ' is-on' : '') + '" id="edWedding" type="button" role="switch" ' +
+      'aria-checked="' + (e.isWedding ? 'true' : 'false') + '" aria-label="결혼준비 지출로 기록"></button>' +
+      '</div>';
+
+    html += '<div class="note-preview"' + (e.isWedding ? '' : ' hidden') + '>비고에 <code>' + WEDDING_TAG +
+      '</code> 가 자동으로 붙습니다.</div>';
+
+    html += '<label class="field" style="margin:16px 0 4px"><span class="field__label">비고 (선택)</span>' +
+      '<input id="edNote" class="input" type="text" placeholder="메모" autocomplete="off" value="' + esc(e.note) + '"></label>';
+
+    html += '<div class="sheet__foot">' +
+      '<button class="btn btn--primary btn--block" id="edSave" type="button"><span class="btn__label">저장</span></button>' +
+      '<button class="btn btn--danger btn--block" id="edDelete" type="button"><span class="btn__label">삭제</span></button>' +
+      '</div>';
+    html += '<p class="sheet__note">삭제는 되돌릴 수 없습니다. 시트1의 ' + e.row + '행이 지워지고 아래 행이 한 칸씩 올라옵니다.</p>';
+    return html;
+  }
+
+  function renderEditSheet() {
+    if (!edit) return;
+    openSheet(editSheetHTML());
+    bindEditSheet();
+  }
+
+  function showEditError(msg) {
+    var box = $('editError');
+    if (!box) { toast(msg); return; }
+    box.hidden = false;
+    box.textContent = msg;
+    try { box.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {}
+  }
+  function clearEditError() {
+    var box = $('editError');
+    if (box) { box.hidden = true; box.textContent = ''; }
+  }
+
+  function setEditBusy(on, label) {
+    if (edit) edit.busy = !!on;
+    var save = $('edSave');
+    if (save) {
+      save.disabled = !!on;
+      var lbl = save.querySelector('.btn__label');
+      if (lbl) lbl.textContent = on ? (label || '저장하는 중…') : '저장';
+    }
+    var del = $('edDelete');
+    if (del) del.disabled = !!on;
+  }
+
+  function bindEditSheet() {
+    var e = edit;
+    if (!e) return;
+
+    var amount = $('edAmount');
+    if (amount) {
+      amount.addEventListener('input', function () {
+        var d = digits(amount.value).replace(/^0+(?=\d)/, '');
+        e.amountRaw = d;
+        amount.value = commaDigits(d);
+        clearEditError();
+      });
+      amount.addEventListener('focus', function () {
+        setTimeout(function () { try { amount.setSelectionRange(amount.value.length, amount.value.length); } catch (err) {} }, 0);
+      });
+    }
+    qsa('[data-ed-add]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var cur = Number(digits(e.amountRaw) || 0);
+        var next = String(cur + Number(el.getAttribute('data-ed-add')));
+        e.amountRaw = next;
+        if (amount) amount.value = commaDigits(next);
+        clearEditError();
+      });
+    });
+    var clr = document.querySelector('[data-ed-clr]');
+    if (clr) clr.addEventListener('click', function () {
+      e.amountRaw = '';
+      if (amount) amount.value = '';
+      clearEditError();
+    });
+
+    qsa('[data-ed-type]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        e.type = el.getAttribute('data-ed-type') === '입금' ? '입금' : '출금';
+        qsa('[data-ed-type]').forEach(function (b) { b.classList.toggle('is-on', b === el); });
+        clearEditError();
+      });
+    });
+
+    var merchant = $('edMerchant');
+    if (merchant) merchant.addEventListener('input', function () { e.merchant = merchant.value; clearEditError(); });
+    var date = $('edDate');
+    if (date) date.addEventListener('change', function () { e.date = date.value || e.date; });
+    var time = $('edTime');
+    if (time) time.addEventListener('change', function () { e.time = time.value || e.time; });
+    var note = $('edNote');
+    if (note) note.addEventListener('input', function () { e.note = note.value; });
+
+    qsa('[data-ed-cat]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        e.category = el.getAttribute('data-ed-cat');
+        qsa('[data-ed-cat]').forEach(function (b) { b.classList.toggle('is-on', b === el); });
+        clearEditError();
+      });
+    });
+
+    qsa('[data-ed-method]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        e.method = el.getAttribute('data-ed-method');
+        qsa('[data-ed-method]').forEach(function (b) { b.classList.toggle('is-on', b === el); });
+        var custom = $('edMethodCustom');
+        if (custom) {
+          custom.style.display = e.method === '__custom' ? '' : 'none';
+          if (e.method === '__custom') { try { custom.focus(); } catch (err) {} }
+        }
+      });
+    });
+    var customIn = $('edMethodCustom');
+    if (customIn) customIn.addEventListener('input', function () { e.methodCustom = customIn.value; clearEditError(); });
+
+    var sw = $('edWedding');
+    if (sw) {
+      sw.addEventListener('click', function () {
+        e.isWedding = !e.isWedding;
+        sw.classList.toggle('is-on', e.isWedding);
+        sw.setAttribute('aria-checked', e.isWedding ? 'true' : 'false');
+        var prev = $('sheetBody').querySelector('.note-preview');
+        if (prev) prev.hidden = !e.isWedding;
+      });
+    }
+
+    var save = $('edSave');
+    if (save) save.addEventListener('click', saveEdit);
+    var del = $('edDelete');
+    if (del) del.addEventListener('click', deleteEdit);
+  }
+
+  // 저장/삭제 뒤 최신 데이터를 다시 받아 화면(목록·대시보드)에 즉시 반영합니다.
+  async function syncNow() {
+    var data = await apiGet();
+    state.data = data;
+    state.syncedAt = Date.now();
+    state.offline = false;
+    saveCache(data);
+    clearBanner();
+    render();
+    return data;
+  }
+
+  async function saveEdit() {
+    var e = edit;
+    if (!e || e.busy) return;
+    clearEditError();
+
+    var amount = Number(digits(e.amountRaw) || 0);
+    var method = e.method === '__custom' ? String(e.methodCustom || '').trim() : e.method;
+
+    if (!String(e.merchant || '').trim()) return showEditError('사용처를 입력해 주세요.');
+    if (!(amount > 0)) return showEditError('금액을 입력해 주세요.');
+    if (!e.category) return showEditError('카테고리를 선택해 주세요.');
+    if (!method) return showEditError('결제수단을 입력해 주세요.');
+
+    var payload = {
+      action: 'update',
+      row: e.row,
+      date: e.date,
+      time: e.time || nowHM(),
+      merchant: String(e.merchant).trim(),
+      type: e.type,
+      amount: amount,
+      method: method,
+      category: e.category,
+      note: String(e.note || '').trim(),
+      isWedding: !!e.isWedding
+    };
+
+    setEditBusy(true, '저장하는 중…');
+    var err = null;
+    try { await apiPost(payload); } catch (x) { err = x; }
+
+    if (err && err.code === 'PIN_MISMATCH') {
+      setEditBusy(false); closeSheet();
+      showLock('PIN이 바뀐 것 같습니다. 다시 연결해 주세요.');
+      return;
+    }
+    // 서버가 이유를 들어 거절한 경우는 재조회 없이 그대로 안내합니다.
+    if (err && err.code && err.code !== 'NETWORK' && err.code !== 'BAD_RESPONSE') {
+      setEditBusy(false);
+      showEditError(err.message || '저장하지 못했습니다.');
+      return;
+    }
+
+    var data = null;
+    try { data = await syncNow(); } catch (x2) { data = null; }
+    setEditBusy(false);
+
+    if (!data) {
+      showEditError('저장은 됐는지 확인하지 못했어요. ↻ 새로고침으로 확인해 주세요.' +
+        (err && err.message ? ' (' + err.message + ')' : ''));
+      return;
+    }
+
+    var landed = txByRow(payload.row);
+    var okLanded = !!landed &&
+      String(landed.merchant) === payload.merchant &&
+      Math.round(n(landed.amount)) === Math.round(payload.amount) &&
+      String(landed.date || '').slice(0, 10) === String(payload.date).slice(0, 10) &&
+      String(landed.type || '') === payload.type;
+
+    if (!okLanded) {
+      showEditError('시트에 반영된 것을 확인하지 못했어요. ↻ 새로고침 후 다시 시도해 주세요.' +
+        (err && err.message ? ' (' + err.message + ')' : ''));
+      return;
+    }
+
+    closeSheet();
+    toast('수정했어요');
+  }
+
+  async function deleteEdit() {
+    var e = edit;
+    if (!e || e.busy) return;
+    clearEditError();
+
+    var label = (e.expectedMerchant || '이 내역') + ' ' + money(e.expectedAmount);
+    if (!window.confirm('이 내역을 삭제할까요?\n\n' + label + '\n\n삭제하면 되돌릴 수 없습니다.')) return;
+
+    var payload = { action: 'delete', row: e.row, expectedMerchant: e.expectedMerchant };
+
+    setEditBusy(true, '삭제하는 중…');
+    var err = null;
+    try { await apiPost(payload); } catch (x) { err = x; }
+
+    if (err && err.code === 'PIN_MISMATCH') {
+      setEditBusy(false); closeSheet();
+      showLock('PIN이 바뀐 것 같습니다. 다시 연결해 주세요.');
+      return;
+    }
+    if (err && err.code && err.code !== 'NETWORK' && err.code !== 'BAD_RESPONSE') {
+      setEditBusy(false);
+      showEditError(err.message || '삭제하지 못했습니다.');
+      return;
+    }
+
+    var data = null;
+    try { data = await syncNow(); } catch (x2) { data = null; }
+    setEditBusy(false);
+
+    if (!data) {
+      showEditError('삭제는 됐는지 확인하지 못했어요. ↻ 새로고침으로 확인해 주세요.' +
+        (err && err.message ? ' (' + err.message + ')' : ''));
+      return;
+    }
+
+    var still = (data.transactions || []).some(function (t) {
+      return Number(t.row) === payload.row &&
+        String(t.merchant || '') === String(payload.expectedMerchant || '') &&
+        Math.round(n(t.amount)) === Math.round(e.expectedAmount);
+    });
+
+    if (still) {
+      showEditError('삭제가 반영되지 않았어요. 새로고침 후 다시 시도해 주세요.');
+      return;
+    }
+
+    closeSheet();
+    toast('삭제했어요');
+  }
+
   function switchTab(tab) {
     if (state.tab === tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     state.tab = tab;
@@ -1084,6 +1472,7 @@
   function closeSheet() {
     $('sheet').hidden = true;
     $('sheetBackdrop').hidden = true;
+    edit = null;
   }
 
   function openSettings() {
