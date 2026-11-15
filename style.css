@@ -82,20 +82,31 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 /* ── 연결 / 잠금 화면 ────────────────────────────────────────────────────── */
 .lock {
   min-height: 100dvh;
-  padding: calc(var(--safe-t) + 34px) 22px calc(var(--safe-b) + 30px);
-  background:
-    radial-gradient(120% 60% at 50% -10%, #4E93FF 0%, #3182F6 38%, #F2F4F7 38.5%, #F2F4F7 100%);
-  display: flex; justify-content: center;
+  background: var(--bg);
+  padding-bottom: calc(var(--safe-b) + 28px);
 }
-.lock__inner { width: 100%; max-width: 430px; }
+.lock__hero {
+  position: relative; overflow: hidden;
+  padding: calc(var(--safe-t) + 34px) 22px 32px;
+  background: linear-gradient(160deg, #4E93FF 0%, #3182F6 46%, #1C5FD0 100%);
+  color: #fff; text-align: center;
+  border-radius: 0 0 30px 30px;
+  box-shadow: 0 10px 26px rgba(28, 95, 208, .18);
+}
+.lock__hero::after {
+  content: ""; position: absolute; right: -60px; top: -80px; width: 200px; height: 200px;
+  border-radius: 50%; background: rgba(255, 255, 255, .08);
+}
+.lock__inner { width: 100%; max-width: 430px; margin: 0 auto; position: relative; z-index: 1; }
+.lock__body { width: 100%; max-width: 430px; margin: 0 auto; padding: 16px 20px 0; }
 .lock__brand { text-align: center; color: #fff; padding-bottom: 26px; }
-.lock__logo { width: 64px; height: 64px; border-radius: 18px; box-shadow: 0 8px 22px rgba(16, 48, 102, .28); }
-.lock__title { font-size: 22px; font-weight: 800; letter-spacing: -.03em; margin-top: 12px; }
-.lock__sub { font-size: 13.5px; line-height: 1.5; opacity: .84; margin-top: 6px; }
+.lock__logo { width: 64px; height: 64px; border-radius: 18px; box-shadow: 0 8px 22px rgba(8, 34, 82, .3); }
+.lock__title { font-size: 23px; font-weight: 800; letter-spacing: -.03em; margin-top: 13px; }
+.lock__sub { font-size: 13.5px; line-height: 1.5; opacity: .88; margin-top: 7px; }
 
 .lock__card {
   background: var(--card); border-radius: 22px; padding: 20px 18px 18px;
-  box-shadow: 0 12px 34px rgba(16, 48, 102, .14);
+  box-shadow: var(--shadow);
 }
 .lock__error {
   margin: 4px 0 12px; padding: 11px 13px; border-radius: 12px;
@@ -105,7 +116,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .lock__hint { margin-top: 14px; font-size: 12px; color: var(--ink-3); text-align: center; line-height: 1.6; }
 .lock__hint b { color: var(--ink-2); }
 
-.lock__help { margin-top: 16px; background: rgba(255, 255, 255, .72); border-radius: 16px; padding: 0 16px; }
+.lock__help { margin-top: 14px; background: var(--card); border-radius: 16px; padding: 0 16px; box-shadow: var(--shadow); }
 .lock__help summary {
   padding: 15px 0; font-size: 13.5px; font-weight: 700; color: var(--ink-2);
   cursor: pointer; list-style: none;
@@ -485,6 +496,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
   .app { max-width: 480px; margin: 0 auto; background: var(--bg); min-height: 100dvh; box-shadow: 0 0 60px rgba(17, 24, 39, .1); }
   .tabbar { max-width: 480px; margin: 0 auto; }
   .toast { bottom: calc(var(--tabbar-h) + 26px); }
+  .lock { max-width: 480px; margin: 0 auto; min-height: 100dvh; box-shadow: 0 0 60px rgba(17, 24, 39, .1); }
 }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
