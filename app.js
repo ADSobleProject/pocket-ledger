@@ -1362,6 +1362,11 @@
       showLock('PIN이 바뀐 것 같습니다. 다시 연결해 주세요.');
       return;
     }
+    if (err && err.code === 'UNKNOWN_ACTION') {
+      setEditBusy(false);
+      showEditError('시트 쪽 백엔드가 수정 기능을 아직 모릅니다. Apps Script에 새 Code.gs를 붙여넣고 [배포 → 새 버전]으로 다시 배포해 주세요.');
+      return;
+    }
     // 서버가 이유를 들어 거절한 경우는 재조회 없이 그대로 안내합니다.
     if (err && err.code && err.code !== 'NETWORK' && err.code !== 'BAD_RESPONSE') {
       setEditBusy(false);
@@ -1413,6 +1418,11 @@
     if (err && err.code === 'PIN_MISMATCH') {
       setEditBusy(false); closeSheet();
       showLock('PIN이 바뀐 것 같습니다. 다시 연결해 주세요.');
+      return;
+    }
+    if (err && err.code === 'UNKNOWN_ACTION') {
+      setEditBusy(false);
+      showEditError('시트 쪽 백엔드가 삭제 기능을 아직 모릅니다. Apps Script에 새 Code.gs를 붙여넣고 [배포 → 새 버전]으로 다시 배포해 주세요.');
       return;
     }
     if (err && err.code && err.code !== 'NETWORK' && err.code !== 'BAD_RESPONSE') {
