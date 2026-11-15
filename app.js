@@ -638,10 +638,14 @@
         groups[groups.length - 1].items.push(t);
       });
       groups.forEach(function (g) {
-        var s = 0;
-        g.items.forEach(function (t) { if (t.type !== '입금') s += n(t.amount); });
+        var s = 0, inc = 0;
+        g.items.forEach(function (t) {
+          if (t.type === '입금') inc += n(t.amount);
+          else s += n(t.amount);
+        });
+        var sumLabel = s > 0 ? money(s) : (inc > 0 ? '+' + numFmt.format(inc) : '');
         html += '<div class="daygroup"><div class="daygroup__head"><span>' + esc(dayLabel(g.date)) + '</span>' +
-          '<span class="daygroup__sum num">' + money(s) + '</span></div>';
+          '<span class="daygroup__sum num">' + sumLabel + '</span></div>';
         g.items.forEach(function (t) { html += txRowHTML(t); });
         html += '</div>';
       });
@@ -820,7 +824,7 @@
       return;
     }
 
-    var rowInfo = res && res.data && res.data.row ? res.data.row + '행 · ' : '';
+    var rowInfo = res && res.row ? res.row + '행 · ' : '';
     state.saved = {
       text: rowInfo + dayLabel(payload.date) + ' ' + payload.time + ' · ' +
         payload.merchant + ' ' + money(payload.amount) + (payload.isWedding ? ' · 결혼준비' : '')
@@ -901,11 +905,15 @@
           '<div class="mrow__top"><span class="mrow__month">' + esc(monthLabel(m.month)) + '</span>' +
           '<span class="mrow__net num ' + netCls + '">' +
           (n(m.net) >= 0 ? '+' : '−') + numFmt.format(Math.abs(Math.round(n(m.net)))) + '</span></div>' +
-          '<div class="mrow__bar">' +
-          '<span class="in" style="width:' + inW + '%"></span>' +
-          '<span class="out" style="width:' + outW + '%"></span></div>' +
-          '<div class="mrow__meta"><span class="num">수입 ' + money(m.income) + '</span>' +
-          '<span class="num">지출 ' + money(m.expense) + '</span>' +
+          '<div class="mrow__lines">' +
+          '<div class="mrow__line"><span class="mrow__lbl">수입</span>' +
+          '<span class="mrow__track"><i class="in" style="width:' + inW + '%"></i></span>' +
+          '<span class="mrow__val num">' + money(m.income) + '</span></div>' +
+          '<div class="mrow__line"><span class="mrow__lbl">지출</span>' +
+          '<span class="mrow__track"><i class="out" style="width:' + outW + '%"></i></span>' +
+          '<span class="mrow__val num">' + money(m.expense) + '</span></div>' +
+          '</div>' +
+          '<div class="mrow__meta">' +
           (m.rate != null ? '<span class="num">저축률 ' + pct(m.rate) + '</span>' : '') +
           (m.count != null ? '<span class="num">' + n(m.count) + '건</span>' : '') +
           '</div></div>';
