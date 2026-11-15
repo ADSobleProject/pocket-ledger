@@ -118,11 +118,14 @@ function appendTransaction_(body) {
   }
 
   var mailId = 'webapp-' + Date.now();
-  var lock = LockService.getDocumentLock();
+  var lock = null;
   var locked = false;
   try {
+    lock = LockService.getDocumentLock();
     locked = lock.tryLock(20000);
-  } catch (e1) { locked = false; }
+  } catch (e1) {
+    locked = false; // 독립 스크립트 등 잠금을 쓸 수 없는 환경에서도 저장은 계속합니다
+  }
 
   try {
     var ss = getSS_();
@@ -147,7 +150,7 @@ function appendTransaction_(body) {
       }
     };
   } finally {
-    if (locked) { try { lock.releaseLock(); } catch (e2) {} }
+    if (locked && lock) { try { lock.releaseLock(); } catch (e2) {} }
   }
 }
 
