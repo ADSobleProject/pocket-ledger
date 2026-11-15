@@ -354,7 +354,10 @@
     if (code === 'NETWORK') {
       return '연결하지 못했습니다. ① 배포 → 액세스 권한이 "모든 사람"인지 ② URL이 .../exec 로 끝나는지 ③ 인터넷 연결을 확인해 주세요.';
     }
-    if (code === 'READ_FAILED') return '시트를 읽지 못했습니다: ' + err.message;
+    if (code === 'READ_FAILED') {
+      return '시트를 읽지 못했습니다: ' + err.message +
+        ' — 스크립트가 시트에 붙어 있지 않은 경우 Code.gs 위쪽 SPREADSHEET_ID 에 시트 ID를 넣어 주세요.';
+    }
     return (err && err.message) || '연결에 실패했습니다.';
   }
 
