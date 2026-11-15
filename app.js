@@ -1,0 +1,1175 @@
+/* ==========================================================================
+   포켓 가계부 · app.js
+   구글 시트(Apps Script 웹 앱)와 통신하는 모바일 가계부 프론트엔드
+   · 데이터는 구글 시트에만 저장됩니다. 이 기기에는 URL/PIN과 최근 캐시만 남습니다.
+   ========================================================================== */
+(function () {
+  'use strict';
+
+  /* ── 상수 ─────────────────────────────────────────────────────────────── */
+  var LS = {
+    url: 'pl.url',
+    pin: 'pl.pin',
+    cache: 'pl.cache',
+    tab: 'pl.tab'
+  };
+
+  var CATEGORIES = [
+    '식사', '카페/간식', '생활/마트', '온라인쇼핑', '교통/차량', '주거/통신',
+    '금융/보험', '의료/건강', '뷰티/미용', '문화/예술', '기타지출', '주수입', '기타수입'
+  ];
+  var EXPENSE_CATS = CATEGORIES.slice(0, 11);
+  var INCOME_CATS = ['주수입', '기타수입'];
+  var CAT_ICON = {
+    '식사': '🍚', '카페/간식': '☕️', '생활/마트': '🛒', '온라인쇼핑': '📦',
+    '교통/차량': '🚕', '주거/통신': '🏠', '금융/보험': '🏦', '의료/건강': '💊',
+    '뷰티/미용': '💇', '문화/예술': '🎬', '기타지출': '🧾', '주수입': '💰', '기타수입': '💸'
+  };
+  var METHODS = ['국민계좌', 'KB국민', '토스', '카카오페이', '네이버페이', '현금'];
+  var WEDDING_TAG = '#결혼준비 #제외';
+
+  var state = {
+    url: '',
+    pin: '',
+    data: null,
+    syncedAt: null,
+    tab: 'home',
+    loading: false,
+    offline: false,
+    filter: { q: '', cat: '', wedding: 'exclude' },
+    form: null,
+    saved: null
+  };
+
+  /* ── DOM 헬퍼 ─────────────────────────────────────────────────────────── */
+  function $(id) { return document.getElementById(id); }
+  function qsa(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  /* ── 숫자 / 날짜 포맷 ─────────────────────────────────────────────────── */
+  var numFmt = new Intl.NumberFormat('ko-KR');
+
+  function n(v) {
+    if (v === null || v === undefined || v === '') return 0;
+    var x = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.\-]/g, ''));
+    return isNaN(x) ? 0 : x;
+  }
+  function money(v) { return '₩' + numFmt.format(Math.round(Math.abs(n(v)))); }
+  function digits(s) { return String(s == null ? '' : s).replace(/[^0-9]/g, ''); }
+  function commaDigits(d) { return d ? numFmt.format(Number(d)) : ''; }
+  function pct(v, digitsN) {
+    var x = n(v);
+    if (!isFinite(x)) x = 0;
+    return (Math.round(x * 10) / 10).toFixed(digitsN === 0 ? 0 : 1).replace(/\.0$/, '') + '%';
+  }
+
+  function pad2(v) { return (v < 10 ? '0' : '') + v; }
+  function todayISO() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+  function nowHM() {
+    var d = new Date();
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+  function parseISO(s) {
+    var m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return null;
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
+  var WD = ['일', '월', '화', '수', '목', '금', '토'];
+
+  function dayLabel(iso) {
+    var d = parseISO(iso);
+    if (!d) return iso || '날짜 없음';
+    var t = new Date();
+    var today = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+    var diff = Math.round((d - today) / 86400000);
+    var base = (d.getMonth() + 1) + '월 ' + d.getDate() + '일 (' + WD[d.getDay()] + ')';
+    if (diff === 0) return '오늘 · ' + base;
+    if (diff === -1) return '어제 · ' + base;
+    return base;
+  }
+  function monthLabel(ym) {
+    var m = String(ym || '').match(/^(\d{4})-(\d{2})/);
+    if (!m) return ym || '';
+    return m[1] + '년 ' + Number(m[2]) + '월';
+  }
+  function monthLabelShort(ym) {
+    var m = String(ym || '').match(/^(\d{4})-(\d{2})/);
+    if (!m) return ym || '';
+    return m[2] + '월';
+  }
+
+  /* ── 저장소 ───────────────────────────────────────────────────────────── */
+  function lsGet(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+  function loadCache() {
+    var raw = lsGet(LS.cache);
+    if (!raw) return null;
+    try {
+      var obj = JSON.parse(raw);
+      if (obj && obj.data) return obj;
+    } catch (e) {}
+    return null;
+  }
+  function saveCache(data) {
+    try {
+      lsSet(LS.cache, JSON.stringify({ at: Date.now(), data: data }));
+    } catch (e) {}
+  }
+
+  /* ── API ──────────────────────────────────────────────────────────────── */
+  function ApiError(code, message) {
+    this.code = code || 'ERROR';
+    this.message = message || '알 수 없는 오류가 발생했습니다.';
+  }
+  ApiError.prototype = Object.create(Error.prototype);
+
+  function normalizeUrl(raw) {
+    var s = String(raw || '').trim();
+    if (!s) return '';
+    if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+    return s;
+  }
+
+  function withParam(base, kv) {
+    var qs = Object.keys(kv).map(function (k) {
+      return encodeURIComponent(k) + '=' + encodeURIComponent(kv[k]);
+    }).join('&');
+    return base + (base.indexOf('?') >= 0 ? '&' : '?') + qs;
+  }
+
+  function parseJson(text) {
+    try { return JSON.parse(text); } catch (e) { return null; }
+  }
+
+  function unwrap(json) {
+    if (json && json.ok === true && json.data) return json.data;
+    if (json && json.ok === false && json.error) {
+      throw new ApiError(json.error.code || 'ERROR', json.error.message || '요청을 처리하지 못했습니다.');
+    }
+    throw new ApiError('BAD_RESPONSE', '서버 응답 형식이 예상과 다릅니다. 웹 앱 배포 설정을 확인해 주세요.');
+  }
+
+  function jsonpGet(base) {
+    return new Promise(function (resolve, reject) {
+      var cb = 'plCb' + Date.now() + Math.floor(Math.random() * 1000);
+      var script = document.createElement('script');
+      var timer = setTimeout(function () { cleanup(); reject(new ApiError('NETWORK', '서버 응답이 없습니다.')); }, 20000);
+
+      function cleanup() {
+        clearTimeout(timer);
+        try { delete window[cb]; } catch (e) { window[cb] = undefined; }
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
+      window[cb] = function (json) {
+        cleanup();
+        try { resolve(unwrap(json)); } catch (err) { reject(err); }
+      };
+      script.onerror = function () { cleanup(); reject(new ApiError('NETWORK', '연결에 실패했습니다.')); };
+      script.src = withParam(base, { pin: state.pin, callback: cb, t: Date.now() });
+      document.head.appendChild(script);
+    });
+  }
+
+  async function apiGet() {
+    if (window.__PL_MOCK__) return unwrap(await window.__PL_MOCK__.get());
+    var base = normalizeUrl(state.url);
+    if (!base) throw new ApiError('NO_URL', '웹 앱 URL이 없습니다.');
+    var url = withParam(base, { pin: state.pin, t: Date.now() });
+
+    var res, text;
+    try {
+      res = await fetch(url, { method: 'GET', cache: 'no-store', redirect: 'follow' });
+      text = await res.text();
+    } catch (e) {
+      return await jsonpGet(base); // CORS/네트워크 차단 시 JSONP로 재시도
+    }
+    var json = parseJson(text);
+    if (!json) {
+      throw new ApiError('BAD_RESPONSE',
+        '서버 응답을 해석하지 못했습니다. 웹 앱 URL이 .../exec 인지, 액세스 권한이 "모든 사람"인지 확인해 주세요.');
+    }
+    return unwrap(json);
+  }
+
+  async function apiPost(payload) {
+    if (window.__PL_MOCK__) return unwrap(await window.__PL_MOCK__.post(payload));
+    var base = normalizeUrl(state.url);
+    if (!base) throw new ApiError('NO_URL', '웹 앱 URL이 없습니다.');
+
+    var body = JSON.stringify(Object.assign({ pin: state.pin }, payload));
+    var res, text;
+    try {
+      // Content-Type: text/plain → 브라우저 preflight(CORS OPTIONS)를 생략합니다.
+      res = await fetch(base, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: body,
+        redirect: 'follow',
+        cache: 'no-store'
+      });
+      text = await res.text();
+    } catch (e) {
+      throw new ApiError('NETWORK', '전송에 실패했습니다. (네트워크 또는 배포 설정 확인)');
+    }
+    var json = parseJson(text);
+    if (!json) throw new ApiError('BAD_RESPONSE', '서버 응답을 해석하지 못했습니다. 실제로 저장되었는지 다시 조회해 확인할게요.');
+    return unwrap(json);
+  }
+
+  /* ── 데이터 파생값 ────────────────────────────────────────────────────── */
+  function isWeddingTx(t) {
+    return /#결혼준비/.test(String((t && t.note) || ''));
+  }
+
+  function budgetView() {
+    var d = state.data || {};
+    var b = d.budget || {};
+    var total = b.total || {};
+    var period = b.period || d.period || {};
+    var spent = n(total.spent), budget = n(total.budget);
+    var rate = budget > 0 ? (spent / budget) * 100 : 0;
+    var remaining = budget > 0 ? budget - spent : 0;
+    var daysLeft = n(period.daysLeft);
+
+    // 예산 시트가 비어 있으면 시트1 최근 내역으로 이번 달 지출을 추정합니다.
+    if (!budget && !spent) {
+      var ym = period.month || (todayISO().slice(0, 7));
+      var sum = 0;
+      (d.transactions || []).forEach(function (t) {
+        if (String(t.date || '').slice(0, 7) === ym && t.type !== '입금' && !isWeddingTx(t)) sum += n(t.amount);
+      });
+      spent = sum;
+    }
+    var daily = daysLeft > 0 ? Math.floor(remaining / daysLeft) : n(total.daily);
+
+    return {
+      month: period.month || todayISO().slice(0, 7),
+      daysLeft: daysLeft,
+      spent: spent,
+      budget: budget,
+      remaining: remaining,
+      rate: rate,
+      daily: daily,
+      rows: (b.rows || []).filter(function (r) {
+        return n(r.budget) > 0 || n(r.spent) > 0;
+      })
+    };
+  }
+
+  function monthlyView() {
+    var d = state.data || {};
+    return (d.monthly || []).slice().sort(function (a, b) {
+      return String(a.month).localeCompare(String(b.month));
+    });
+  }
+
+  function currentMonthRow() {
+    var bv = budgetView();
+    var rows = monthlyView();
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i].month).slice(0, 7) === bv.month) return rows[i];
+    }
+    return null;
+  }
+
+  function weddingView() {
+    var w = (state.data && state.data.wedding) || {};
+    return { summary: w.summary || { spend: 0, refund: 0, net: 0, count: 0 }, rows: w.rows || [] };
+  }
+
+  /* ── 잠금 화면 ────────────────────────────────────────────────────────── */
+  function showLock(message) {
+    $('main').hidden = true;
+    $('lock').hidden = false;
+    $('inUrl').value = state.url || lsGet(LS.url) || '';
+    $('inPin').value = '';
+    setLockError(message || '');
+    setTimeout(function () {
+      var target = $('inUrl').value ? $('inPin') : $('inUrl');
+      try { target.focus(); } catch (e) {}
+    }, 120);
+  }
+
+  function setLockError(msg) {
+    var box = $('lockError');
+    if (!msg) { box.hidden = true; box.textContent = ''; return; }
+    box.hidden = false;
+    box.textContent = msg;
+  }
+
+  function setConnecting(on) {
+    var btn = $('btnConnect');
+    btn.disabled = on;
+    btn.querySelector('.btn__label').textContent = on ? '연결하는 중…' : '연결하기';
+  }
+
+  async function connect(url, pin) {
+    setLockError('');
+    var cleanUrl = normalizeUrl(url);
+    if (!/^https?:\/\/[^\s]+$/i.test(cleanUrl)) {
+      setLockError('웹 앱 URL을 확인해 주세요. https://script.google.com/macros/s/…/exec 형식입니다.');
+      return;
+    }
+    if (!/^\d{4}$/.test(pin)) {
+      setLockError('PIN은 숫자 4자리입니다. (Code.gs 의 APP_PIN 과 같은 값)');
+      return;
+    }
+    setConnecting(true);
+    var prev = { url: state.url, pin: state.pin };
+    state.url = cleanUrl;
+    state.pin = pin;
+    try {
+      var data = await apiGet();
+      state.data = data;
+      state.syncedAt = Date.now();
+      state.offline = false;
+      lsSet(LS.url, cleanUrl);
+      lsSet(LS.pin, pin);
+      saveCache(data);
+      setConnecting(false);
+      enterApp();
+      toast('연결했어요');
+    } catch (err) {
+      state.url = prev.url;
+      state.pin = prev.pin;
+      setConnecting(false);
+      setLockError(connectErrorMessage(err));
+    }
+  }
+
+  function connectErrorMessage(err) {
+    var code = err && err.code;
+    if (code === 'PIN_MISMATCH') return 'PIN이 맞지 않습니다. Code.gs 의 APP_PIN 값과 같은 4자리를 입력해 주세요.';
+    if (code === 'BAD_RESPONSE') return err.message;
+    if (code === 'NETWORK') {
+      return '연결하지 못했습니다. ① 배포 → 액세스 권한이 "모든 사람"인지 ② URL이 .../exec 로 끝나는지 ③ 인터넷 연결을 확인해 주세요.';
+    }
+    if (code === 'READ_FAILED') return '시트를 읽지 못했습니다: ' + err.message;
+    return (err && err.message) || '연결에 실패했습니다.';
+  }
+
+  /* ── 앱 진입 ──────────────────────────────────────────────────────────── */
+  function enterApp() {
+    $('lock').hidden = true;
+    $('main').hidden = false;
+    var saved = lsGet(LS.tab);
+    state.tab = (saved === 'home' || saved === 'list' || saved === 'add' || saved === 'plan') ? saved : 'home';
+    if (!state.form) resetForm(true);
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  /* ── 새로고침 ─────────────────────────────────────────────────────────── */
+  async function refresh(opts) {
+    opts = opts || {};
+    if (state.loading) return false;
+    state.loading = true;
+    var btn = $('btnRefresh');
+    if (btn) btn.disabled = true; // 잠금 상태에서는 버튼이 없습니다
+    try {
+      var data = await apiGet();
+      state.data = data;
+      state.syncedAt = Date.now();
+      state.offline = false;
+      saveCache(data);
+      clearBanner();
+      render();
+      return true;
+    } catch (err) {
+      if (err && err.code === 'PIN_MISMATCH') {
+        showLock('PIN이 바뀐 것 같습니다. 다시 연결해 주세요.');
+        return false;
+      }
+      state.offline = true;
+      setBanner((err && err.message) || '데이터를 불러오지 못했습니다.', true);
+      if (!opts.silent) render();
+      return false;
+    } finally {
+      state.loading = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function setBanner(msg, retryable) {
+    var box = $('banner');
+    box.hidden = false;
+    box.innerHTML = '<span>' + esc(msg) + '</span>' +
+      (retryable ? '<button type="button" id="bannerRetry">다시 시도</button>' : '');
+    var r = $('bannerRetry');
+    if (r) r.addEventListener('click', function () { clearBanner(); refresh(); });
+  }
+  function clearBanner() { $('banner').hidden = true; $('banner').innerHTML = ''; }
+
+  /* ── 렌더 ─────────────────────────────────────────────────────────────── */
+  function render() {
+    if (!state.data) {
+      renderSkeleton();
+      return;
+    }
+    var titles = {
+      home: ['홈', '이번 달 흐름'],
+      list: ['내역', ''],
+      add: ['입력', '새 거래 기록'],
+      plan: ['결혼/월별', '']
+    };
+    var t = titles[state.tab] || titles.home;
+    $('topTitle').textContent = t[0];
+    $('topSub').textContent = subTitle();
+
+    qsa('.tab').forEach(function (el) {
+      el.classList.toggle('is-on', el.getAttribute('data-tab') === state.tab);
+    });
+
+    var view = $('view');
+    if (state.tab === 'home') view.innerHTML = homeHTML();
+    else if (state.tab === 'list') view.innerHTML = listHTML();
+    else if (state.tab === 'add') view.innerHTML = addHTML();
+    else view.innerHTML = planHTML();
+
+    bindView();
+  }
+
+  function subTitle() {
+    var bv = budgetView();
+    if (state.tab === 'home') return monthLabel(bv.month);
+    if (state.tab === 'list') {
+      var c = filteredTx().length;
+      return c + '건';
+    }
+    if (state.tab === 'add') return '시트1에 바로 추가됩니다';
+    if (state.tab === 'plan') return '결혼준비 · 월별 요약';
+    return '';
+  }
+
+  function renderSkeleton() {
+    $('view').innerHTML =
+      '<div class="card"><div class="skel" style="width:38%;height:12px"></div>' +
+      '<div class="skel" style="width:64%;height:26px;margin-top:14px"></div>' +
+      '<div class="skel" style="width:100%;height:9px;margin-top:18px"></div>' +
+      '<div class="skel" style="width:80%;height:12px;margin-top:16px"></div></div>' +
+      '<div class="card"><div class="skel" style="width:30%;height:12px"></div>' +
+      '<div class="skel" style="width:100%;height:12px;margin-top:16px"></div>' +
+      '<div class="skel" style="width:100%;height:12px"></div>' +
+      '<div class="skel" style="width:70%;height:12px"></div></div>';
+  }
+
+  function syncLine() {
+    if (!state.syncedAt) return '';
+    var d = new Date(state.syncedAt);
+    return (state.offline ? '오프라인 · ' : '') + '마지막 동기화 ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+
+  /* ── 홈 ───────────────────────────────────────────────────────────────── */
+  function homeHTML() {
+    var bv = budgetView();
+    var cur = currentMonthRow();
+    var w = weddingView();
+    var recent = (state.data.transactions || []).slice(0, 5);
+    var fill = Math.max(0, Math.min(100, bv.rate));
+    var gaugeClass = bv.rate >= 100 ? ' is-over' : (bv.rate >= 80 ? ' is-warn' : '');
+
+    var html = '';
+
+    html += '<section class="hero">';
+    html += '<p class="hero__label">' + esc(monthLabel(bv.month)) + ' 총 지출</p>';
+    html += '<p class="hero__amount num">' + money(bv.spent) + '</p>';
+    html += '<p class="hero__budget">예산 <b class="num">' + money(bv.budget) + '</b> 중 <b class="num">' + pct(bv.rate) + '</b> 사용</p>';
+    html += '<div class="gauge">';
+    html += '<div class="gauge__track"><div class="gauge__fill' + gaugeClass + '" id="gaugeFill" style="width:0%"></div></div>';
+    html += '<div class="gauge__meta"><span class="num">' +
+      (bv.remaining >= 0 ? money(bv.remaining) + ' 남음' : money(Math.abs(bv.remaining)) + ' 초과') +
+      '</span><span>' + (bv.daysLeft > 0 ? '남은 ' + bv.daysLeft + '일' : '') + '</span></div>';
+    html += '</div>';
+    html += '<dl class="hero__chips">';
+    html += '<div class="hero__chip"><dt>하루 가용액</dt><dd class="num">' +
+      (bv.remaining > 0 && bv.daysLeft > 0 ? money(bv.daily) : '—') + '</dd></div>';
+    html += '<div class="hero__chip"><dt>이번 달 수입</dt><dd class="num">' +
+      (cur ? money(cur.income) : '—') + '</dd></div>';
+    html += '</dl>';
+    html += '</section>';
+
+    // 카테고리별 예산
+    html += '<div class="card"><div class="card__head"><h2 class="card__title">카테고리별 예산</h2>' +
+      '<span class="card__more">' + (bv.rows.length ? bv.rows.length + '개' : '') + '</span></div>';
+    if (!bv.rows.length) {
+      html += emptyHTML('📋', '예산 정보가 없어요', '시트의 예산 탭 B열에 월 예산을 입력하면 여기에 표시됩니다.');
+    } else {
+      html += '<div class="bud">';
+      bv.rows.forEach(function (r) {
+        html += budgetRowHTML(r);
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // 최근 거래
+    html += '<div class="card"><div class="card__head"><h2 class="card__title">최근 거래</h2>' +
+      '<button class="card__more" type="button" data-go="list">전체보기 ›</button></div>';
+    if (!recent.length) {
+      html += emptyHTML('🧾', '아직 기록이 없어요', '+ 입력 탭에서 첫 거래를 추가해 보세요.');
+    } else {
+      recent.forEach(function (t) { html += txRowHTML(t); });
+    }
+    html += '</div>';
+
+    // 결혼준비 안내
+    html += '<div class="card card--flat" data-go="plan" style="cursor:pointer">' +
+      '<div class="card__head" style="margin:0"><div>' +
+      '<h2 class="card__title">💍 결혼준비는 별도 집계</h2>' +
+      '<p style="font-size:12px;color:var(--ink-3);font-weight:600;margin-top:3px">누적 ' +
+      money(w.summary.spend) + ' · ' + n(w.summary.count) + '건 · 생활비에서 제외</p></div>' +
+      '<span class="card__more">›</span></div></div>';
+
+    html += '<p class="sync">' + esc(syncLine()) + '</p>';
+    return html;
+  }
+
+  function budgetRowHTML(r) {
+    var rate = n(r.rate);
+    var cls = rate >= 100 ? 'over' : (rate >= 80 ? 'warn' : '');
+    var statusCls = cls === 'over' ? 'over' : (cls === 'warn' ? 'warn' : 'ok');
+    var width = Math.max(0, Math.min(100, rate));
+    return '<div class="bud__row bud__row--' + (cls || 'ok') + '">' +
+      '<div class="bud__top">' +
+      '<span class="bud__name">' + esc(r.category) + ' <span class="bud__status bud__status--' + statusCls + '">' +
+      esc(r.status || '여유') + '</span></span>' +
+      '<span class="bud__amounts num"><b>' + money(r.spent) + '</b> / ' + money(r.budget) + '</span>' +
+      '</div>' +
+      '<div class="bud__bar"><i style="width:' + width + '%"></i></div>' +
+      '</div>';
+  }
+
+  function txRowHTML(t) {
+    var isIn = t.type === '입금';
+    var w = isWeddingTx(t);
+    var meta = [];
+    if (t.category) meta.push(esc(t.category));
+    if (t.method) meta.push(esc(t.method));
+    if (t.time) meta.push(esc(t.time));
+    var note = String(t.note || '').replace(/#결혼준비/g, '').replace(/#제외/g, '').trim();
+    if (note) meta.push(esc(note.length > 14 ? note.slice(0, 14) + '…' : note));
+    return '<div class="tx">' +
+      '<div class="tx__icon">' + (w ? '💍' : (CAT_ICON[t.category] || '🧾')) + '</div>' +
+      '<div class="tx__body">' +
+      '<div class="tx__name">' + (w ? '<span class="tx__tag">결혼</span>' : '') + esc(t.merchant || '이름 없음') + '</div>' +
+      '<div class="tx__meta">' + meta.join(' · ') + '</div>' +
+      '</div>' +
+      '<div class="tx__amt num' + (isIn ? ' tx__amt--in' : '') + '">' +
+      (isIn ? '+' : '−') + numFmt.format(Math.round(n(t.amount))) +
+      '</div>' +
+      '</div>';
+  }
+
+  function emptyHTML(icon, title, desc) {
+    return '<div class="empty"><div class="empty__icon">' + icon + '</div>' +
+      '<div class="empty__t">' + esc(title) + '</div>' +
+      (desc ? '<div class="empty__d">' + esc(desc) + '</div>' : '') + '</div>';
+  }
+
+  /* ── 내역 ─────────────────────────────────────────────────────────────── */
+  function filteredTx() {
+    var tx = (state.data && state.data.transactions) || [];
+    var q = state.filter.q.trim().toLowerCase();
+    var cat = state.filter.cat;
+    var w = state.filter.wedding;
+    return tx.filter(function (t) {
+      var isW = isWeddingTx(t);
+      if (w === 'exclude' && isW) return false;
+      if (w === 'only' && !isW) return false;
+      if (cat && t.category !== cat) return false;
+      if (q) {
+        var hay = [t.merchant, t.category, t.method, t.note].join(' ').toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+  }
+
+  function listHTML() {
+    var tx = filteredTx();
+    var out = 0, inc = 0;
+    tx.forEach(function (t) { if (t.type === '입금') inc += n(t.amount); else out += n(t.amount); });
+
+    var html = '';
+    html += '<div class="search">' +
+      '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>' +
+      '<input id="searchInput" type="search" inputmode="search" placeholder="사용처 · 카테고리 · 메모 검색" value="' + esc(state.filter.q) + '">' +
+      (state.filter.q ? '<button class="search__clear" type="button" data-clear-q>✕</button>' : '') +
+      '</div>';
+
+    html += '<div class="chips chips--scroll" style="margin-bottom:8px">';
+    [['exclude', '생활비만'], ['all', '전체'], ['only', '💍 결혼만']].forEach(function (o) {
+      html += '<button class="chip' + (state.filter.wedding === o[0] ? ' is-on' : '') +
+        '" type="button" data-wed="' + o[0] + '">' + o[1] + '</button>';
+    });
+    html += '</div>';
+
+    html += '<div class="chips chips--scroll" style="margin-bottom:12px">';
+    html += '<button class="chip chip--sm' + (!state.filter.cat ? ' is-on' : '') + '" type="button" data-cat="">전체</button>';
+    CATEGORIES.forEach(function (c) {
+      html += '<button class="chip chip--sm' + (state.filter.cat === c ? ' is-on' : '') +
+        '" type="button" data-cat="' + esc(c) + '">' + (CAT_ICON[c] || '') + ' ' + esc(c) + '</button>';
+    });
+    html += '</div>';
+
+    html += '<div class="card" style="padding:14px 16px 6px">';
+    html += '<div class="card__head" style="margin-bottom:2px">' +
+      '<span class="card__more">' + tx.length + '건</span>' +
+      '<span class="card__more num">지출 ' + money(out) + (inc ? ' · 수입 ' + money(inc) : '') + '</span></div>';
+
+    if (!tx.length) {
+      html += emptyHTML('🔍', '조건에 맞는 내역이 없어요', '검색어나 필터를 바꿔 보세요.');
+    } else {
+      var lastDate = null;
+      var groups = [];
+      tx.forEach(function (t) {
+        var d = String(t.date || '').slice(0, 10);
+        if (!groups.length || groups[groups.length - 1].date !== d) groups.push({ date: d, items: [] });
+        groups[groups.length - 1].items.push(t);
+      });
+      groups.forEach(function (g) {
+        var s = 0;
+        g.items.forEach(function (t) { if (t.type !== '입금') s += n(t.amount); });
+        html += '<div class="daygroup"><div class="daygroup__head"><span>' + esc(dayLabel(g.date)) + '</span>' +
+          '<span class="daygroup__sum num">' + money(s) + '</span></div>';
+        g.items.forEach(function (t) { html += txRowHTML(t); });
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+    html += '<p class="sync">' + esc(syncLine()) + ' · 최근 ' + ((state.data.transactions || []).length) + '건 기준</p>';
+    return html;
+  }
+
+  /* ── 입력 ─────────────────────────────────────────────────────────────── */
+  function resetForm(keepDate) {
+    state.form = {
+      date: keepDate && state.form ? state.form.date : todayISO(),
+      time: nowHM(),
+      type: (state.form && state.form.type) || '출금',
+      merchant: '',
+      amountRaw: '',
+      method: (state.form && state.form.method) || '국민계좌',
+      methodCustom: '',
+      category: (state.form && state.form.category) || '',
+      note: '',
+      isWedding: false
+    };
+  }
+
+  function addHTML() {
+    var f = state.form;
+    var cats = f.type === '입금' ? INCOME_CATS.concat(EXPENSE_CATS) : EXPENSE_CATS;
+    var html = '';
+
+    html += '<div class="form">';
+
+    if (state.saved) {
+      html += '<div class="saved"><div class="saved__icon">✓</div><div>' +
+        '<div class="saved__t">시트1에 저장했어요</div>' +
+        '<div class="saved__d">' + esc(state.saved.text) + '</div></div></div>';
+    }
+
+    html += '<div id="formError" class="formerr" hidden></div>';
+
+    html += '<div class="amount-box">' +
+      '<label class="amount-box__label" for="inAmount">금액</label>' +
+      '<input id="inAmount" class="amount-input" type="text" inputmode="numeric" autocomplete="off" ' +
+      'placeholder="0" value="' + esc(commaDigits(f.amountRaw)) + '">' +
+      '<div class="amount-quick">' +
+      '<button type="button" data-add="10000">+1만</button>' +
+      '<button type="button" data-add="50000">+5만</button>' +
+      '<button type="button" data-add="100000">+10만</button>' +
+      '<button type="button" data-clr-amount>지우기</button>' +
+      '</div></div>';
+
+    html += '<div class="card">';
+
+    html += '<div class="segmented" id="segType">' +
+      '<button type="button" data-type="출금" class="' + (f.type === '출금' ? 'is-on' : '') + '">출금</button>' +
+      '<button type="button" data-type="입금" class="' + (f.type === '입금' ? 'is-on' : '') + '">입금</button>' +
+      '</div>';
+
+    html += '<label class="field"><span class="field__label">사용처</span>' +
+      '<input id="inMerchant" class="input" type="text" placeholder="예) 스타벅스 전주점" ' +
+      'autocomplete="off" value="' + esc(f.merchant) + '"></label>';
+
+    html += '<div class="row2">' +
+      '<label class="field"><span class="field__label">날짜</span>' +
+      '<input id="inDate" class="input" type="date" value="' + esc(f.date) + '"></label>' +
+      '<label class="field"><span class="field__label">시각</span>' +
+      '<input id="inTime" class="input" type="time" value="' + esc(f.time) + '"></label>' +
+      '</div>';
+
+    html += '<div class="field" style="margin-bottom:6px"><span class="field__label">카테고리</span>' +
+      '<div class="chips" id="catChips">';
+    cats.forEach(function (c) {
+      html += '<button class="chip' + (f.category === c ? ' is-on' : '') + '" type="button" data-cat-sel="' +
+        esc(c) + '">' + (CAT_ICON[c] || '') + ' ' + esc(c) + '</button>';
+    });
+    html += '</div></div>';
+
+    html += '<div class="field" style="margin:16px 0 0"><span class="field__label">결제수단</span>' +
+      '<div class="chips" id="methodChips">';
+    METHODS.forEach(function (m) {
+      html += '<button class="chip' + (f.method === m ? ' is-on' : '') + '" type="button" data-method="' +
+        esc(m) + '">' + esc(m) + '</button>';
+    });
+    html += '<button class="chip' + (f.method === '__custom' ? ' is-on' : '') +
+      '" type="button" data-method="__custom">직접입력</button>';
+    html += '</div>';
+    html += '<input id="inMethodCustom" class="input" type="text" placeholder="결제수단 이름" autocomplete="off" ' +
+      'style="margin-top:9px;' + (f.method === '__custom' ? '' : 'display:none') + '" value="' + esc(f.methodCustom) + '">';
+    html += '</div>';
+
+    html += '</div>'; // card
+
+    html += '<div class="switchrow" id="weddingRow">' +
+      '<div><div class="switchrow__t">💍 결혼준비 지출</div>' +
+      '<div class="switchrow__d">생활비 집계에서 빼고 결혼준비로 따로 모읍니다</div></div>' +
+      '<button class="switch' + (f.isWedding ? ' is-on' : '') + '" id="swWedding" type="button" role="switch" ' +
+      'aria-checked="' + (f.isWedding ? 'true' : 'false') + '" aria-label="결혼준비 지출로 기록"></button>' +
+      '</div>';
+
+    if (f.isWedding) {
+      html += '<div class="note-preview">비고에 <code>' + WEDDING_TAG + '</code> 가 자동으로 붙습니다.</div>';
+    }
+
+    html += '<div class="card" style="padding:16px 18px">' +
+      '<label class="field" style="margin:0"><span class="field__label">비고 (선택)</span>' +
+      '<input id="inNote" class="input" type="text" placeholder="메모" autocomplete="off" value="' + esc(f.note) + '"></label>' +
+      '</div>';
+
+    html += '<button class="btn btn--primary btn--block" id="btnSave" type="button" style="margin-top:4px">' +
+      '<span class="btn__label">시트에 저장</span></button>';
+    html += '<p class="sync">저장하면 구글 시트 <b>시트1</b> 마지막 행에 추가됩니다.</p>';
+    html += '</div>';
+
+    return html;
+  }
+
+  function showFormError(msg) {
+    var box = $('formError');
+    if (!box) { toast(msg); return; }
+    box.hidden = false;
+    box.textContent = msg;
+    box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  function clearFormError() {
+    var box = $('formError');
+    if (box) { box.hidden = true; box.textContent = ''; }
+  }
+
+  async function saveTransaction() {
+    var f = state.form;
+    clearFormError();
+    state.saved = null;
+
+    var amount = Number(digits(f.amountRaw) || 0);
+    var method = f.method === '__custom' ? f.methodCustom.trim() : f.method;
+
+    if (!f.merchant.trim()) return showFormError('사용처를 입력해 주세요.');
+    if (!(amount > 0)) return showFormError('금액을 입력해 주세요.');
+    if (!f.category) return showFormError('카테고리를 선택해 주세요.');
+    if (!method) return showFormError('결제수단을 입력해 주세요.');
+
+    var payload = {
+      action: 'append',
+      date: f.date,
+      time: f.time || nowHM(),
+      merchant: f.merchant.trim(),
+      type: f.type,
+      amount: amount,
+      method: method,
+      category: f.category,
+      note: f.note.trim(),
+      isWedding: !!f.isWedding
+    };
+
+    var btn = $('btnSave');
+    if (btn) { btn.disabled = true; btn.querySelector('.btn__label').textContent = '저장하는 중…'; }
+
+    var res = null, err = null;
+    try {
+      res = await apiPost(payload);
+    } catch (e) {
+      err = e;
+    }
+
+    // 저장 여부는 결과와 무관하게 "재조회"로 확인합니다.
+    var verified = await verifyLanded(payload);
+
+    if (btn) { btn.disabled = false; btn.querySelector('.btn__label').textContent = '시트에 저장'; }
+
+    if (!verified) {
+      if (err && err.code === 'PIN_MISMATCH') {
+        showLock('PIN이 바뀐 것 같습니다. 다시 연결해 주세요.');
+        return;
+      }
+      showFormError((err && err.message ? err.message : '저장하지 못했습니다.') + ' 다시 시도해 주세요.');
+      return;
+    }
+
+    var rowInfo = res && res.data && res.data.row ? res.data.row + '행 · ' : '';
+    state.saved = {
+      text: rowInfo + dayLabel(payload.date) + ' ' + payload.time + ' · ' +
+        payload.merchant + ' ' + money(payload.amount) + (payload.isWedding ? ' · 결혼준비' : '')
+    };
+
+    var keepDate = f.date, keepType = f.type, keepMethod = f.method, keepCategory = f.category;
+    resetForm(false);
+    state.form.date = keepDate;
+    state.form.type = keepType;
+    state.form.method = keepMethod;
+    state.form.category = keepCategory;
+
+    render();
+    toast('저장했어요');
+  }
+
+  async function verifyLanded(payload) {
+    try {
+      var data = await apiGet();
+      state.data = data;
+      state.syncedAt = Date.now();
+      state.offline = false;
+      saveCache(data);
+      var tx = data.transactions || [];
+      for (var i = 0; i < Math.min(tx.length, 5); i++) {
+        var t = tx[i];
+        if (String(t.date).slice(0, 10) === payload.date &&
+            n(t.amount) === n(payload.amount) &&
+            String(t.merchant) === payload.merchant) return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /* ── 결혼/월별 ────────────────────────────────────────────────────────── */
+  function planHTML() {
+    var w = weddingView();
+    var s = w.summary;
+    var months = monthlyView();
+    var html = '';
+
+    html += '<section class="wed">' +
+      '<p class="wed__label">결혼준비 누적 지출</p>' +
+      '<p class="wed__amount num">' + money(s.spend) + '</p>' +
+      '<dl class="wed__grid">' +
+      '<div><dt>입금/환급</dt><dd class="num">' + money(s.refund) + '</dd></div>' +
+      '<div><dt>순 지출</dt><dd class="num">' + money(s.net) + '</dd></div>' +
+      '<div><dt>건수</dt><dd class="num">' + n(s.count) + '건</dd></div>' +
+      '</dl></section>';
+
+    html += '<div class="card"><div class="card__head"><h2 class="card__title">결혼준비 내역</h2>' +
+      '<span class="card__more">' + w.rows.length + '건</span></div>';
+    if (!w.rows.length) {
+      html += emptyHTML('💍', '결혼준비 기록이 없어요', '입력 탭에서 💍 토글을 켜고 저장하면 여기에 쌓입니다.');
+    } else {
+      w.rows.forEach(function (t) { html += txRowHTML(t); });
+    }
+    html += '</div>';
+
+    // 월별 요약
+    var max = 1;
+    months.forEach(function (m) {
+      max = Math.max(max, n(m.income), n(m.expense));
+    });
+
+    html += '<div class="card"><div class="card__head"><h2 class="card__title">월별 흐름</h2>' +
+      '<span class="card__more">' + months.length + '개월</span></div>';
+    if (!months.length) {
+      html += emptyHTML('📈', '월별 요약이 없어요', '시트의 월별요약 탭이 채워지면 자동으로 표시됩니다.');
+    } else {
+      months.slice().reverse().forEach(function (m) {
+        var inW = Math.max(2, Math.round(n(m.income) / max * 100));
+        var outW = Math.max(2, Math.round(n(m.expense) / max * 100));
+        var netCls = n(m.net) >= 0 ? 'mrow__net--plus' : 'mrow__net--minus';
+        html += '<div class="mrow">' +
+          '<div class="mrow__top"><span class="mrow__month">' + esc(monthLabel(m.month)) + '</span>' +
+          '<span class="mrow__net num ' + netCls + '">' +
+          (n(m.net) >= 0 ? '+' : '−') + numFmt.format(Math.abs(Math.round(n(m.net)))) + '</span></div>' +
+          '<div class="mrow__bar">' +
+          '<span class="in" style="width:' + inW + '%"></span>' +
+          '<span class="out" style="width:' + outW + '%"></span></div>' +
+          '<div class="mrow__meta"><span class="num">수입 ' + money(m.income) + '</span>' +
+          '<span class="num">지출 ' + money(m.expense) + '</span>' +
+          (m.rate != null ? '<span class="num">저축률 ' + pct(m.rate) + '</span>' : '') +
+          (m.count != null ? '<span class="num">' + n(m.count) + '건</span>' : '') +
+          '</div></div>';
+      });
+    }
+    html += '</div>';
+    html += '<p class="sync">' + esc(syncLine()) + '</p>';
+    return html;
+  }
+
+  /* ── 이벤트 바인딩 ────────────────────────────────────────────────────── */
+  function bindView() {
+    qsa('[data-go]').forEach(function (el) {
+      el.addEventListener('click', function () { switchTab(el.getAttribute('data-go')); });
+    });
+
+    if (state.tab === 'list') bindList();
+    if (state.tab === 'add') bindAdd();
+
+    var gauge = $('gaugeFill');
+    if (gauge) {
+      var target = Math.max(0, Math.min(100, budgetView().rate));
+      requestAnimationFrame(function () { gauge.style.width = target + '%'; });
+    }
+  }
+
+  function bindList() {
+    var input = $('searchInput');
+    if (input) {
+      input.addEventListener('input', function () {
+        state.filter.q = input.value;
+        var pos = input.selectionStart;
+        render();
+        var again = $('searchInput');
+        if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
+      });
+    }
+    var clear = document.querySelector('[data-clear-q]');
+    if (clear) clear.addEventListener('click', function () { state.filter.q = ''; render(); });
+
+    qsa('[data-wed]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        state.filter.wedding = el.getAttribute('data-wed');
+        render();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    });
+    qsa('[data-cat]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        state.filter.cat = el.getAttribute('data-cat');
+        render();
+      });
+    });
+  }
+
+  function bindAdd() {
+    var f = state.form;
+
+    var amount = $('inAmount');
+    if (amount) {
+      amount.addEventListener('input', function () {
+        var d = digits(amount.value).replace(/^0+(?=\d)/, '');
+        f.amountRaw = d;
+        amount.value = commaDigits(d);
+        clearFormError();
+      });
+      amount.addEventListener('focus', function () {
+        setTimeout(function () { amount.setSelectionRange(amount.value.length, amount.value.length); }, 0);
+      });
+    }
+    qsa('[data-add]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var cur = Number(digits(f.amountRaw) || 0);
+        var next = String(cur + Number(el.getAttribute('data-add')));
+        f.amountRaw = next;
+        if (amount) amount.value = commaDigits(next);
+        clearFormError();
+      });
+    });
+    var clr = document.querySelector('[data-clr-amount]');
+    if (clr) clr.addEventListener('click', function () {
+      f.amountRaw = '';
+      if (amount) amount.value = '';
+      clearFormError();
+    });
+
+    var seg = $('segType');
+    if (seg) {
+      qsa('[data-type]', seg).forEach(function (el) {
+        el.addEventListener('click', function () {
+          f.type = el.getAttribute('data-type');
+          if (f.type === '입금' && EXPENSE_CATS.indexOf(f.category) >= 0) f.category = '기타수입';
+          render();
+        });
+      });
+    }
+
+    var merchant = $('inMerchant');
+    if (merchant) merchant.addEventListener('input', function () { f.merchant = merchant.value; clearFormError(); });
+    var date = $('inDate');
+    if (date) date.addEventListener('change', function () { f.date = date.value || todayISO(); });
+    var time = $('inTime');
+    if (time) time.addEventListener('change', function () { f.time = time.value || nowHM(); });
+    var note = $('inNote');
+    if (note) note.addEventListener('input', function () { f.note = note.value; });
+
+    qsa('[data-cat-sel]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        f.category = el.getAttribute('data-cat-sel');
+        qsa('[data-cat-sel]').forEach(function (b) { b.classList.toggle('is-on', b === el); });
+        clearFormError();
+      });
+    });
+
+    qsa('[data-method]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        f.method = el.getAttribute('data-method');
+        qsa('[data-method]').forEach(function (b) { b.classList.toggle('is-on', b === el); });
+        var custom = $('inMethodCustom');
+        if (custom) {
+          custom.style.display = f.method === '__custom' ? '' : 'none';
+          if (f.method === '__custom') custom.focus();
+        }
+      });
+    });
+    var customIn = $('inMethodCustom');
+    if (customIn) customIn.addEventListener('input', function () { f.methodCustom = customIn.value; clearFormError(); });
+
+    var sw = $('swWedding');
+    if (sw) {
+      sw.addEventListener('click', function () {
+        f.isWedding = !f.isWedding;
+        if (f.isWedding && !f.category) f.category = '기타지출';
+        render();
+      });
+    }
+
+    var save = $('btnSave');
+    if (save) save.addEventListener('click', saveTransaction);
+  }
+
+  function switchTab(tab) {
+    if (state.tab === tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    state.tab = tab;
+    lsSet(LS.tab, tab);
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  /* ── 토스트 / 시트 ────────────────────────────────────────────────────── */
+  var toastTimer = null;
+  function toast(msg) {
+    var el = $('toast');
+    el.textContent = msg;
+    el.classList.add('is-show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.remove('is-show'); }, 2200);
+  }
+
+  function openSheet(html) {
+    $('sheetBody').innerHTML = html;
+    $('sheet').hidden = false;
+    $('sheetBackdrop').hidden = false;
+  }
+  function closeSheet() {
+    $('sheet').hidden = true;
+    $('sheetBackdrop').hidden = true;
+  }
+
+  function openSettings() {
+    var d = new Date(state.syncedAt || Date.now());
+    var masked = state.url.replace(/^(https:\/\/script\.google\.com\/macros\/s\/)([^/]+)/, function (m, a, b) {
+      return a + b.slice(0, 6) + '…' + b.slice(-4);
+    });
+    var html = '<h2 class="sheet__title">연결 설정</h2>' +
+      '<p class="sheet__sub">URL과 PIN은 이 기기에만 저장되고, 가계부 데이터는 구글 시트에만 있습니다.</p>' +
+      '<div class="sheet__row"><span>웹 앱 URL</span><code>' + esc(masked) + '</code></div>' +
+      '<div class="sheet__row"><span>PIN</span><code>••••</code></div>' +
+      '<div class="sheet__row"><span>마지막 동기화</span><code>' +
+        pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ' · ' + (d.getMonth() + 1) + '/' + d.getDate() + '</code></div>' +
+      '<div class="sheet__row"><span>불러온 거래</span><code>' +
+        ((state.data && state.data.transactions || []).length) + '건</code></div>' +
+      '<div class="sheet__actions">' +
+      '<button class="btn btn--ghost" type="button" data-act="refresh">지금 새로고침</button>' +
+      '<button class="btn btn--ghost" type="button" data-act="url">URL · PIN 다시 입력</button>' +
+      '<button class="btn btn--danger" type="button" data-act="logout">연결 해제</button>' +
+      '</div>' +
+      '<p class="sheet__note">📱 홈 화면에 앱으로 추가: iPhone은 공유 → <b>홈 화면에 추가</b>, ' +
+      'Android는 Chrome 메뉴 → <b>앱 설치</b>.<br>시트를 직접 고친 뒤에는 오른쪽 위 ↻ 를 눌러 주세요.</p>';
+    openSheet(html);
+
+    qsa('[data-act]', $('sheetBody')).forEach(function (el) {
+      el.addEventListener('click', function () {
+        var act = el.getAttribute('data-act');
+        if (act === 'refresh') { closeSheet(); refresh(); }
+        if (act === 'url') { closeSheet(); showLock(''); }
+        if (act === 'logout') {
+          if (!window.confirm('이 기기에서 URL과 PIN, 저장된 캐시를 지웁니다. 시트 데이터는 그대로 남습니다.')) return;
+          lsDel(LS.url); lsDel(LS.pin); lsDel(LS.cache); lsDel(LS.tab);
+          state.url = ''; state.pin = ''; state.data = null; state.syncedAt = null;
+          state.saved = null; state.form = null; state.filter = { q: '', cat: '', wedding: 'exclude' };
+          closeSheet();
+          showLock('연결을 해제했습니다.');
+        }
+      });
+    });
+  }
+
+  /* ── 부트스트랩 ───────────────────────────────────────────────────────── */
+  function bindGlobal() {
+    $('lockForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      connect($('inUrl').value, $('inPin').value.replace(/\D/g, ''));
+    });
+    $('inPin').addEventListener('input', function () {
+      this.value = this.value.replace(/\D/g, '').slice(0, 4);
+    });
+    $('inUrl').addEventListener('input', function () { setLockError(''); });
+
+    qsa('.tab').forEach(function (el) {
+      el.addEventListener('click', function () { switchTab(el.getAttribute('data-tab')); });
+    });
+    $('btnRefresh').addEventListener('click', function () { refresh(); });
+    $('btnSettings').addEventListener('click', openSettings);
+    $('sheetBackdrop').addEventListener('click', closeSheet);
+
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible' && state.url && Date.now() - (state.syncedAt || 0) > 60000) {
+        refresh({ silent: true });
+      }
+    });
+  }
+
+  function registerSW() {
+    if (!('serviceWorker' in navigator)) return;
+    if (!/^https?:$/.test(location.protocol)) return;
+    navigator.serviceWorker.register('./sw.js').catch(function () {});
+  }
+
+  function boot() {
+    bindGlobal();
+    registerSW();
+    var url = lsGet(LS.url);
+    var pin = lsGet(LS.pin);
+
+    if (url && pin) {
+      state.url = url;
+      state.pin = pin;
+      var cache = loadCache();
+      if (cache) {
+        state.data = cache.data;
+        state.syncedAt = cache.at;
+      }
+      if (!state.form) resetForm(true);
+      enterApp();
+      refresh({ silent: true });
+    } else {
+      showLock('');
+    }
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+
+  // 테스트/디버그용 최소 노출
+  window.__pocketLedger = { state: state, refresh: refresh, switchTab: switchTab };
+})();

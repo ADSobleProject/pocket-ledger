@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="포켓 가계부">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5BA0FF"/>
+      <stop offset="0.55" stop-color="#3182F6"/>
+      <stop offset="1" stop-color="#1B57C4"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <path d="M0 116C0 52 52 0 116 0h280c64 0 116 52 116 116v92C400 148 300 116 180 150 110 170 44 200 0 226z" fill="url(#shine)"/>
+
+  <!-- 지갑 몸체 -->
+  <rect x="112" y="160" width="288" height="192" rx="46" fill="#FFFFFF"/>
+  <!-- 지갑 홈(카드 넣는 곳) -->
+  <rect x="286" y="228" width="114" height="56" rx="28" fill="url(#bg)"/>
+  <circle cx="352" cy="256" r="11" fill="#FFFFFF"/>
+  <!-- 동전 표시 -->
+  <circle cx="182" cy="196" r="0" fill="#fff"/>
+</svg>
