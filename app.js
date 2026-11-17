@@ -630,7 +630,10 @@
       var tags = noteTags(t);
       note = tags.length ? tags.map(function (g) { return '#' + g; }).join(' ') : '';
     }
-    if (note) meta.push(esc(note.length > 14 ? note.slice(0, 14) + '…' : note));
+    var noteText = note && note.length > 14 ? note.slice(0, 14) + '…' : note;
+    // 별도지출은 태그가 잘리지 않게 맨 앞에 둡니다.
+    if (sep && noteText) meta.unshift(esc(noteText));
+    else if (noteText) meta.push(esc(noteText));
 
     var tagHTML = w ? '<span class="tx__tag">결혼</span>'
       : (sep ? '<span class="tx__tag tx__tag--sep">별도</span>' : '');
