@@ -2,7 +2,7 @@
    네트워크 우선(항상 최신), 실패 시 캐시로 동작합니다.
    가계부 데이터 자체는 캐시하지 않고 항상 Apps Script에서 새로 받습니다. */
 var CACHE = 'pocket-ledger-v3';
-var SHELL = ['./', './index.html', './style.css', './app.js', './manifest.json',
+var SHELL = ['./', './index.html', './style.css?v=3', './app.js?v=3', './manifest.json',
              './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', function (e) {
