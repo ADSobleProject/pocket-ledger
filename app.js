@@ -987,7 +987,7 @@
     html += '</div>';
 
     if (seg === 'separate') {
-      html += '<p class="sync">시트 `별도지출` 탭과 같은 기준(비고에 #제외, #결혼준비 아님) · ' +
+      html += '<p class="sync">시트 «별도지출» 탭과 같은 기준(비고에 #제외, #결혼준비 아님) · ' +
         '앱이 받은 최근 ' + ((state.data && state.data.transactions || []).length) + '건에서 집계<br>' +
         '내역 수정은 시트1에서 해 주세요 — 앱에서 고치면 #제외 태그가 지워져 생활비로 잡힙니다.</p>';
     }
