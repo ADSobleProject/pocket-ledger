@@ -218,6 +218,71 @@ check('결혼/월별: 별도지출 화면에 시트 직접 수정 안내가 나�
   PL.state.planSeg = 'wedding';
 });
 
+/* ── 7. 행 날짜 표시 ─────────────────────────────────────────────────────── */
+check('shortDate: ISO 날짜를 M/D 로 줄인다', function () {
+  eq(PL.shortDate('2026-11-16'), '11/16');
+  eq(PL.shortDate('2026-01-05'), '1/5');
+  eq(PL.shortDate(''), '');
+  eq(PL.shortDate('날짜없음'), '');
+});
+
+check('결혼/월별: 결혼준비 내역 행 메타가 날짜로 시작한다', function () {
+  PL.state.planSeg = 'wedding';
+  var html = PL.views.plan();
+  has(html, '11/14 · 기타지출', '날짜 · 카테고리 순서');
+  has(html, '11/14 · 기타지출 · 국민계좌 · 10:00', '시각까지 이어서');
+});
+
+check('결혼/월별: 별도지출 내역 행 메타도 날짜로 시작하고 태그가 그 뒤에 온다', function () {
+  PL.state.planSeg = 'separate';
+  var html = PL.views.plan();
+  has(html, '11/17 · #자동차보험 · 금융/보험', '날짜 · 태그 · 카테고리 순서');
+  PL.state.planSeg = 'wedding';
+});
+
+check('내역: 날짜 묶음이 있는 목록 행에는 날짜를 중복해서 넣지 않는다', function () {
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude' };
+  var html = PL.views.listResults();
+  has(html, 'daygroup__head', '날짜 묶음 헤더는 그대로');
+  hasNot(html, '11/16 · 생활/마트', '그룹 헤더가 날짜를 대신하므로 행에는 날짜 없음');
+});
+
+/* ── 8. 검색창 한글 IME 조합 보존 ──────────────────────────────────────── */
+check('내역: 결과 영역 조각(#listResults)에는 검색 input 이 없다(조합 유지)', function () {
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude' };
+  var full = PL.views.list();
+  has(full, 'id="listResults"');
+  has(full, 'id="searchInput"');
+  var frag = PL.views.listResults();
+  hasNot(frag, 'searchInput', '결과 조각이 input 을 다시 그리면 IME 조합이 끊깁니다');
+  hasNot(frag, '<input');
+  has(frag, '이마트 에브리데이');
+});
+
+check('내역: 검색창은 type=text 라 네이티브 ✕ 가 겹치지 않는다', function () {
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude' };
+  var html = PL.views.list();
+  has(html, 'id="searchInput" type="text"');
+  hasNot(html, 'type="search"');
+  has(html, 'data-clear-q');
+});
+
+check('내역: 검색어가 바뀌면 결과 조각만 그 검색어로 걸러진다', function () {
+  PL.state.filter = { q: '한화', cat: '', wedding: 'all' };
+  var frag = PL.views.listResults();
+  has(frag, '자동차보험료');
+  hasNot(frag, '이마트 에브리데이');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude' };
+});
+
+check('isComposingEvent: 한글 조합 중 입력 이벤트를 가려낸다', function () {
+  eq(PL.isComposingEvent({ isComposing: true }), true);
+  eq(PL.isComposingEvent({ isComposing: false }), false);
+  eq(PL.isComposingEvent({ keyCode: 229 }), true, 'Android 구형 키보드');
+  eq(PL.isComposingEvent(null), false);
+  eq(PL.isComposingEvent(undefined), false);
+});
+
 /* ── 결과 출력 ───────────────────────────────────────────────────────────── */
 var __failed = R.filter(function (r) { return !r.ok; });
 JSON.stringify({

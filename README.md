@@ -28,7 +28,7 @@
     ├── code_gs_test.js    # update/delete · 방어 로직 테스트
     ├── run_frontend_tests.py  # app.js 단위 테스트 러너 (quickjs + DOM 스텁)
     ├── dom_stub.js        # 최소 DOM 모의 환경
-    └── frontend_test.js   # 별도지출 판정·집계·필터·렌더 테스트
+    └── frontend_test.js   # 별도지출 판정·집계·필터·날짜/IME 렌더 테스트
 ```
 
 ## 1. 백엔드 붙이기 (5분)
@@ -130,8 +130,14 @@ python3 tests/run_frontend_tests.py  # 23개 검사 — 별도지출 판정·집
 
 ## 참고
 
-- `index.html` 의 `app.js?v=3` · `style.css?v=3` 는 GitHub Pages 의 10분 캐시 때문에 붙여 둔 버전입니다.
+- `index.html` 의 `app.js?v=4` · `style.css?v=4` 는 GitHub Pages 의 10분 캐시 때문에 붙여 둔 버전입니다.
   app.js/style.css 를 고칠 때 이 번호를 올리고 `sw.js` 의 `CACHE` 이름도 같이 올리면 폰에서 바로 반영됩니다.
+
+- 내역 탭 검색창은 `type="text"` + `#listResults` 부분 갱신입니다. 입력할 때마다 화면 전체를
+  다시 그리면 안드로이드 키보드의 한글 조합(IME)이 끊겨 `ㅁㅏㅌㅡ` 처럼 낱자로 들어갑니다.
+  검색 input 노드는 그대로 두고 결과 영역만 갈아 끼우세요.
+
+- 결혼/월별 탭 내역 행은 날짜 묶음이 없어 각 행 메타가 `11/16 · 기타지출 · …` 처럼 날짜로 시작합니다.
 
 - 카테고리는 시트의 표준 13개(식사 · 카페/간식 · 생활/마트 · 온라인쇼핑 · 교통/차량 · 주거/통신 ·
   금융/보험 · 의료/건강 · 뷰티/미용 · 문화/예술 · 기타지출 · 주수입 · 기타수입)를 그대로 사용합니다.

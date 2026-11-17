@@ -109,6 +109,12 @@
     if (!m) return ym || '';
     return m[2] + '월';
   }
+  // 목록 행 메타용 짧은 날짜 — 2026-11-16 → 11/16
+  function shortDate(iso) {
+    var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return '';
+    return Number(m[2]) + '/' + Number(m[3]);
+  }
 
   /* ── 저장소 ───────────────────────────────────────────────────────────── */
   function lsGet(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
@@ -614,13 +620,17 @@
       '</div>';
   }
 
-  function txRowHTML(t) {
+  function txRowHTML(t, opts) {
+    opts = opts || {};
     var isIn = t.type === '입금';
     var w = isWeddingTx(t);
     var sep = isSeparateTx(t);
     var row = Number(t.row);
     var tappable = isFinite(row) && row >= 2 && !sep; // 별도지출은 앱 수정 시 #제외 태그가 지워져 시트에서 직접 고칩니다
+    // opts.date — 날짜 묶음(daygroup)이 없는 목록에서 행마다 날짜를 붙입니다.
+    var dateText = opts.date ? shortDate(t.date) : '';
     var meta = [];
+    if (dateText) meta.push(dateText);
     if (t.category) meta.push(esc(t.category));
     if (t.method) meta.push(esc(t.method));
     if (t.time) meta.push(esc(t.time));
@@ -631,8 +641,8 @@
       note = tags.length ? tags.map(function (g) { return '#' + g; }).join(' ') : '';
     }
     var noteText = note && note.length > 14 ? note.slice(0, 14) + '…' : note;
-    // 별도지출은 태그가 잘리지 않게 맨 앞에 둡니다.
-    if (sep && noteText) meta.unshift(esc(noteText));
+    // 별도지출은 태그가 잘리지 않게 날짜 바로 뒤에 둡니다. (날짜가 없으면 맨 앞)
+    if (sep && noteText) meta.splice(dateText ? 1 : 0, 0, esc(noteText));
     else if (noteText) meta.push(esc(noteText));
 
     var tagHTML = w ? '<span class="tx__tag">결혼</span>'
@@ -684,18 +694,21 @@
     return true;
   }
 
-  function listHTML() {
-    var tx = filteredTx();
-    var out = 0, inc = 0;
-    tx.forEach(function (t) { if (t.type === '입금') inc += n(t.amount); else out += n(t.amount); });
-
-    var html = '';
-    html += '<div class="search">' +
+  // 검색창(type=text 라서 네이티브 search ✕ 는 나오지 않습니다) — 한 번만 그리고,
+  // 글자를 칠 때는 아래 #listResults 를 갈아 끼웁니다. input 노드를 그대로 두어야
+  // 안드로이드 키보드의 한글 IME 조합(composition)이 끊기지 않습니다.
+  function listSearchHTML() {
+    return '<div class="search">' +
       '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>' +
-      '<input id="searchInput" type="search" inputmode="search" placeholder="사용처 · 카테고리 · 메모 검색" value="' + esc(state.filter.q) + '">' +
-      (state.filter.q ? '<button class="search__clear" type="button" data-clear-q>✕</button>' : '') +
+      '<input id="searchInput" type="text" inputmode="search" enterkeyhint="search" autocomplete="off" ' +
+      'autocapitalize="off" spellcheck="false" placeholder="사용처 · 카테고리 · 메모 검색" value="' + esc(state.filter.q) + '">' +
+      '<button class="search__clear" type="button" data-clear-q aria-label="검색어 지우기"' +
+      (state.filter.q ? '' : ' hidden') + '>✕</button>' +
       '</div>';
+  }
 
+  function listChipsHTML() {
+    var html = '';
     html += '<div class="chips chips--scroll" style="margin-bottom:8px">';
     [['exclude', '생활비만'], ['all', '전체'], ['only', '💍 결혼만'], ['sep', '🧾 별도만']].forEach(function (o) {
       html += '<button class="chip' + (state.filter.wedding === o[0] ? ' is-on' : '') +
@@ -710,7 +723,16 @@
         '" type="button" data-cat="' + esc(c) + '">' + (CAT_ICON[c] || '') + ' ' + esc(c) + '</button>';
     });
     html += '</div>';
+    return html;
+  }
 
+  // 검색 결과 영역만 따로 그리는 조각 — 검색 input 은 여기에 포함되지 않습니다.
+  function listResultsHTML() {
+    var tx = filteredTx();
+    var out = 0, inc = 0;
+    tx.forEach(function (t) { if (t.type === '입금') inc += n(t.amount); else out += n(t.amount); });
+
+    var html = '';
     html += '<div class="card" style="padding:14px 16px 6px">';
     html += '<div class="card__head" style="margin-bottom:2px">' +
       '<span class="card__more">' + tx.length + '건</span>' +
@@ -742,6 +764,11 @@
     html += '</div>';
     html += '<p class="sync">' + esc(syncLine()) + ' · 최근 ' + ((state.data.transactions || []).length) + '건 기준</p>';
     return html;
+  }
+
+  function listHTML() {
+    return listSearchHTML() + listChipsHTML() +
+      '<div id="listResults">' + listResultsHTML() + '</div>';
   }
 
   /* ── 입력 ─────────────────────────────────────────────────────────────── */
@@ -982,7 +1009,8 @@
         ? emptyHTML('🧾', '별도지출 기록이 없어요', '시트1 비고에 #제외 를 달고 #결혼준비 는 달지 않은 지출이 여기에 모입니다.')
         : emptyHTML('💍', '결혼준비 기록이 없어요', '입력 탭에서 💍 토글을 켜고 저장하면 여기에 쌓입니다.');
     } else {
-      cur.rows.forEach(function (t) { html += txRowHTML(t); });
+      // 날짜 묶음(daygroup)이 없는 목록이라 행마다 날짜를 붙입니다.
+      cur.rows.forEach(function (t) { html += txRowHTML(t, { date: true }); });
     }
     html += '</div>';
 
@@ -1050,12 +1078,7 @@
 
     if (state.tab === 'list') bindList();
     if (state.tab === 'add') bindAdd();
-
-    qsa('[data-txrow]').forEach(function (el) {
-      el.addEventListener('click', function () {
-        openEditSheet(Number(el.getAttribute('data-txrow')));
-      });
-    });
+    bindTxRows(document);
 
     var gauge = $('gaugeFill');
     if (gauge) {
@@ -1064,31 +1087,68 @@
     }
   }
 
+  function bindTxRows(root) {
+    qsa('[data-txrow]', root || document).forEach(function (el) {
+      el.addEventListener('click', function () {
+        openEditSheet(Number(el.getAttribute('data-txrow')));
+      });
+    });
+  }
+
+  // 한글 IME 조합 중인 입력인지 — 조합 중에는 목록을 다시 그리지 않습니다.
+  function isComposingEvent(e) {
+    return !!(e && (e.isComposing === true || e.keyCode === 229));
+  }
+
+  // 검색어·필터가 바뀌었을 때 결과 영역(#listResults)만 갈아 끼웁니다.
+  // 검색 input 노드를 다시 만들지 않으므로 키보드 포커스와 한글 조합이 유지됩니다.
+  function updateListResults() {
+    var box = $('listResults');
+    if (box) {
+      box.innerHTML = listResultsHTML();
+      bindTxRows(box);
+    }
+    var sub = $('topSub');
+    if (sub && state.tab === 'list') sub.textContent = filteredTx().length + '건';
+    var clear = document.querySelector('[data-clear-q]');
+    if (clear) clear.hidden = !state.filter.q;
+  }
+
   function bindList() {
     var input = $('searchInput');
     if (input) {
-      input.addEventListener('input', function () {
+      input.addEventListener('input', function (e) {
         state.filter.q = input.value;
-        var pos = input.selectionStart;
-        render();
-        var again = $('searchInput');
-        if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
+        // 조합 중(isComposing)이면 화면을 건드리지 않고, compositionend 에서 한 번만 반영합니다.
+        if (isComposingEvent(e) || input.isComposing) return;
+        updateListResults();
+      });
+      input.addEventListener('compositionend', function () {
+        state.filter.q = input.value;
+        updateListResults();
       });
     }
     var clear = document.querySelector('[data-clear-q]');
-    if (clear) clear.addEventListener('click', function () { state.filter.q = ''; render(); });
+    if (clear) clear.addEventListener('click', function () {
+      state.filter.q = '';
+      var box = $('searchInput');
+      if (box) { box.value = ''; try { box.focus(); } catch (e) {} }
+      updateListResults();
+    });
 
     qsa('[data-wed]').forEach(function (el) {
       el.addEventListener('click', function () {
         state.filter.wedding = el.getAttribute('data-wed');
-        render();
+        qsa('[data-wed]').forEach(function (b) { b.classList.toggle('is-on', b === el); });
+        updateListResults();
         window.scrollTo({ top: 0, behavior: 'smooth' });
       });
     });
     qsa('[data-cat]').forEach(function (el) {
       el.addEventListener('click', function () {
         state.filter.cat = el.getAttribute('data-cat');
-        render();
+        qsa('[data-cat]').forEach(function (b) { b.classList.toggle('is-on', b === el); });
+        updateListResults();
       });
     });
   }
@@ -1189,6 +1249,7 @@
       .replace(/\s+/g, ' ')
       .trim()
       .replace(/^[·,\-:;|]+ ?/, '')
+      .replace(/[·,\-:;|]+$/, '')
       .trim();
   }
 
@@ -1699,6 +1760,8 @@
     deriveSeparate: deriveSeparate,
     separateView: separateView,
     txMatches: txMatches,
-    views: { home: homeHTML, list: listHTML, plan: planHTML }
+    isComposingEvent: isComposingEvent,
+    shortDate: shortDate,
+    views: { home: homeHTML, list: listHTML, listResults: listResultsHTML, plan: planHTML }
   };
 })();

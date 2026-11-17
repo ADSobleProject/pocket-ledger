@@ -315,7 +315,12 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
   font-size: 15px; font-weight: 600; color: var(--ink);
 }
 .search input::placeholder { color: #B6BEC9; font-weight: 500; }
+/* input type=search 의 네이티브 ✕(cancel)는 숨겨 커스텀 ✕ 하나만 보이게 합니다 */
+.search input::-webkit-search-cancel-button,
+.search input::-webkit-search-decoration,
+.search input::-webkit-search-results-button { -webkit-appearance: none; appearance: none; display: none; }
 .search__clear { font-size: 15px; color: var(--ink-3); padding: 4px; }
+.search__clear[hidden] { display: none; }
 
 /* ── 입력 폼 ─────────────────────────────────────────────────────────────── */
 .form { padding-bottom: 8px; }
