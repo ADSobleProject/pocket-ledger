@@ -10,6 +10,7 @@
 - ✍️ 입력은 `시트1` 마지막 행에 한 줄 추가하는 것뿐, 수식 탭은 건드리지 않습니다
 - ✏️ 내역을 탭하면 **수정 · 삭제** — 그 행의 A~H열만 고치고 메일ID(I열)는 보존합니다
 - 💍 결혼준비 지출은 따로 모아 생활비 집계에서 제외
+- 🧾 **별도지출** — 비고에 `#제외` 가 붙고 `#결혼준비` 가 아닌 지출(연납 자동차보험료 등)을 `결혼/별도` 탭에서 따로 모아 봅니다
 
 ```
 .
@@ -24,7 +25,10 @@
 └── tests/
     ├── run_tests.py       # Code.gs 단위 테스트 러너 (quickjs)
     ├── mock_env.js        # 스프레드시트·LockService 모의 환경
-    └── code_gs_test.js    # update/delete · 방어 로직 테스트
+    ├── code_gs_test.js    # update/delete · 방어 로직 테스트
+    ├── run_frontend_tests.py  # app.js 단위 테스트 러너 (quickjs + DOM 스텁)
+    ├── dom_stub.js        # 최소 DOM 모의 환경
+    └── frontend_test.js   # 별도지출 판정·집계·필터·렌더 테스트
 ```
 
 ## 1. 백엔드 붙이기 (5분)
@@ -109,8 +113,20 @@ A~H열만 다시 쓰고 I열(메일ID)은 그대로 둡니다. `isWedding: true`
 
 ```bash
 pip install quickjs
-python3 tests/run_tests.py      # 27개 검사 — update/delete/방어/다른 시트 무접촉
+python3 tests/run_tests.py           # 27개 검사 — update/delete/방어/다른 시트 무접촉
+python3 tests/run_frontend_tests.py  # 23개 검사 — 별도지출 판정·집계·필터·화면 렌더
 ```
+
+## 5. 별도지출 표시 방식
+
+`결혼/월별` 탭의 `🧾 별도지출` 세그먼트는 **백엔드 수정 없이** 동작합니다.
+앱이 GET 으로 받는 `transactions`(시트1 최근 200건)의 비고를 보고
+`#제외` 가 있고 `#결혼준비` 가 없는 행을 모아 합계·건수를 계산합니다(시트 `별도지출` 탭과 같은 기준).
+
+- 응답에 `separate: { summary, rows }` 가 있으면 그 값을 우선 사용합니다 — 나중에 `Code.gs` 에
+  시트 `별도지출` 탭 읽기를 추가해 재배포하면, 앱은 그대로 누적 전체를 표시합니다.
+- 별도지출 행은 앱에서 **수정할 수 없습니다**. 앱의 수정 저장은 `#결혼준비` · `#제외` 태그를 지우기 때문에
+  (`Code.gs` 의 `stripWeddingTags_`), 고치면 생활비로 잡힙니다. 시트1에서 직접 수정하세요.
 
 ## 참고
 

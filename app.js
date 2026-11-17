@@ -27,6 +27,9 @@
   };
   var METHODS = ['국민계좌', 'KB국민', '토스', '카카오페이', '네이버페이', '현금'];
   var WEDDING_TAG = '#결혼준비 #제외';
+  // 시트 규칙: 비고에 '#제외'가 붙은 행은 생활비 집계에서 빠집니다.
+  // 그중 '#결혼준비'가 아닌 것을 앱에서는 '별도지출'로 따로 모아 보여 줍니다.
+  var EXCLUDE_TAG = '#제외';
 
   var state = {
     url: '',
@@ -37,6 +40,7 @@
     loading: false,
     offline: false,
     filter: { q: '', cat: '', wedding: 'exclude' },
+    planSeg: 'wedding', // 'wedding' | 'separate'
     form: null,
     saved: null
   };
@@ -231,6 +235,42 @@
     return /#결혼준비/.test(String((t && t.note) || ''));
   }
 
+  // #제외 는 달렸지만 #결혼준비 는 아닌 지출 = 별도지출(연납 보험료처럼 생활비에서 빼는 특별지출)
+  function isSeparateTx(t) {
+    var note = String((t && t.note) || '');
+    return note.indexOf(EXCLUDE_TAG) >= 0 && !isWeddingTx(t);
+  }
+
+  // 비고에서 태그만 뽑습니다 (#결혼준비 · #제외 는 화면에 보여 주지 않음).
+  function noteTags(t) {
+    var note = String((t && t.note) || '');
+    var out = [];
+    var re = /#([^\s#]+)/g;
+    var m;
+    while ((m = re.exec(note))) {
+      var tag = m[1];
+      if (tag === '결혼준비' || tag === '제외') continue;
+      if (out.indexOf(tag) < 0) out.push(tag);
+    }
+    return out;
+  }
+
+  // 별도지출 집계 — ① 백엔드가 separate 를 내려 주면 그대로 쓰고,
+  // ② 없으면 앱이 받은 거래 목록(시트1)의 비고로 직접 판단합니다.
+  function deriveSeparate(tx) {
+    var summary = { spend: 0, refund: 0, net: 0, count: 0 };
+    var rows = [];
+    (tx || []).forEach(function (t) {
+      if (!isSeparateTx(t)) return;
+      rows.push(t);
+      if (t.type === '입금') summary.refund += n(t.amount);
+      else summary.spend += n(t.amount);
+      summary.count += 1;
+    });
+    summary.net = summary.spend - summary.refund;
+    return { summary: summary, rows: rows };
+  }
+
   function budgetView() {
     var d = state.data || {};
     var b = d.budget || {};
@@ -246,7 +286,7 @@
       var ym = period.month || (todayISO().slice(0, 7));
       var sum = 0;
       (d.transactions || []).forEach(function (t) {
-        if (String(t.date || '').slice(0, 7) === ym && t.type !== '입금' && !isWeddingTx(t)) sum += n(t.amount);
+        if (String(t.date || '').slice(0, 7) === ym && t.type !== '입금' && !isWeddingTx(t) && !isSeparateTx(t)) sum += n(t.amount);
       });
       spent = sum;
     }
@@ -280,6 +320,20 @@
       if (String(rows[i].month).slice(0, 7) === bv.month) return rows[i];
     }
     return null;
+  }
+
+  function separateView() {
+    var s = state.data && state.data.separate;
+    if (s && s.rows) {
+      return {
+        summary: s.summary || { spend: 0, refund: 0, net: 0, count: 0 },
+        rows: s.rows || [],
+        source: 'sheet'
+      };
+    }
+    var derived = deriveSeparate((state.data && state.data.transactions) || []);
+    derived.source = 'app';
+    return derived;
   }
 
   function weddingView() {
@@ -450,7 +504,7 @@
       return c + '건';
     }
     if (state.tab === 'add') return '시트1에 바로 추가됩니다';
-    if (state.tab === 'plan') return '결혼준비 · 월별 요약';
+    if (state.tab === 'plan') return '결혼준비 · 별도지출 · 월별';
     return '';
   }
 
@@ -525,16 +579,24 @@
     }
     html += '</div>';
 
-    // 결혼준비 안내
-    html += '<div class="card card--flat" data-go="plan" style="cursor:pointer">' +
-      '<div class="card__head" style="margin:0"><div>' +
-      '<h2 class="card__title">💍 결혼준비는 별도 집계</h2>' +
-      '<p style="font-size:12px;color:var(--ink-3);font-weight:600;margin-top:3px">누적 ' +
-      money(w.summary.spend) + ' · ' + n(w.summary.count) + '건 · 생활비에서 제외</p></div>' +
-      '<span class="card__more">›</span></div></div>';
+    // 생활비 집계에서 빼는 지출 (결혼준비 · 별도지출)
+    var sv = separateView();
+    html += '<div class="card"><div class="card__head"><h2 class="card__title">생활비에서 빼는 지출</h2>' +
+      '<span class="card__more">예산 집계 제외</span></div>';
+    html += exclRowHTML('💍', '결혼준비', w.summary, 'wedding');
+    html += exclRowHTML('🧾', '별도지출', sv.summary, 'separate');
+    html += '</div>';
 
     html += '<p class="sync">' + esc(syncLine()) + '</p>';
     return html;
+  }
+
+  function exclRowHTML(icon, label, s, seg) {
+    return '<button class="excl excl--' + seg + '" type="button" data-go="plan" data-planseg="' + seg + '">' +
+      '<span class="excl__icon">' + icon + '</span>' +
+      '<span class="excl__body"><span class="excl__t">' + esc(label) + '</span>' +
+      '<span class="excl__d num">' + money(s.spend) + ' · ' + n(s.count) + '건</span></span>' +
+      '<span class="excl__more">›</span></button>';
   }
 
   function budgetRowHTML(r) {
@@ -555,19 +617,28 @@
   function txRowHTML(t) {
     var isIn = t.type === '입금';
     var w = isWeddingTx(t);
+    var sep = isSeparateTx(t);
     var row = Number(t.row);
-    var tappable = isFinite(row) && row >= 2; // 시트1의 실제 행 번호가 있을 때만 수정 가능
+    var tappable = isFinite(row) && row >= 2 && !sep; // 별도지출은 앱 수정 시 #제외 태그가 지워져 시트에서 직접 고칩니다
     var meta = [];
     if (t.category) meta.push(esc(t.category));
     if (t.method) meta.push(esc(t.method));
     if (t.time) meta.push(esc(t.time));
     var note = stripWeddingNote(t.note);
+    if (sep) {
+      // 별도지출은 '#자동차보험' 같은 분류 태그만 보여 줍니다.
+      var tags = noteTags(t);
+      note = tags.length ? tags.map(function (g) { return '#' + g; }).join(' ') : '';
+    }
     if (note) meta.push(esc(note.length > 14 ? note.slice(0, 14) + '…' : note));
 
+    var tagHTML = w ? '<span class="tx__tag">결혼</span>'
+      : (sep ? '<span class="tx__tag tx__tag--sep">별도</span>' : '');
+
     var inner =
-      '<div class="tx__icon">' + (w ? '💍' : (CAT_ICON[t.category] || '🧾')) + '</div>' +
+      '<div class="tx__icon">' + (w ? '💍' : (sep ? '🧾' : (CAT_ICON[t.category] || '🧾'))) + '</div>' +
       '<div class="tx__body">' +
-      '<div class="tx__name">' + (w ? '<span class="tx__tag">결혼</span>' : '') + esc(t.merchant || '이름 없음') + '</div>' +
+      '<div class="tx__name">' + tagHTML + esc(t.merchant || '이름 없음') + '</div>' +
       '<div class="tx__meta">' + meta.join(' · ') + '</div>' +
       '</div>' +
       '<div class="tx__amt num' + (isIn ? ' tx__amt--in' : '') + '">' +
@@ -589,20 +660,25 @@
   /* ── 내역 ─────────────────────────────────────────────────────────────── */
   function filteredTx() {
     var tx = (state.data && state.data.transactions) || [];
-    var q = state.filter.q.trim().toLowerCase();
-    var cat = state.filter.cat;
-    var w = state.filter.wedding;
-    return tx.filter(function (t) {
-      var isW = isWeddingTx(t);
-      if (w === 'exclude' && isW) return false;
-      if (w === 'only' && !isW) return false;
-      if (cat && t.category !== cat) return false;
-      if (q) {
-        var hay = [t.merchant, t.category, t.method, t.note].join(' ').toLowerCase();
-        if (hay.indexOf(q) < 0) return false;
-      }
-      return true;
-    });
+    return tx.filter(function (t) { return txMatches(t, state.filter); });
+  }
+
+  // 필터 판정 (순수 함수 — 단위 테스트 대상)
+  function txMatches(t, f) {
+    f = f || {};
+    var isW = isWeddingTx(t);
+    var isSep = isSeparateTx(t);
+    // '생활비만' = #제외 가 붙지 않은 모든 거래 (결혼준비 + 별도지출 모두 빠짐)
+    if (f.wedding === 'exclude' && (isW || isSep)) return false;
+    if (f.wedding === 'only' && !isW) return false;
+    if (f.wedding === 'sep' && !isSep) return false;
+    if (f.cat && t.category !== f.cat) return false;
+    var q = String(f.q || '').trim().toLowerCase();
+    if (q) {
+      var hay = [t.merchant, t.category, t.method, t.note].join(' ').toLowerCase();
+      if (hay.indexOf(q) < 0) return false;
+    }
+    return true;
   }
 
   function listHTML() {
@@ -618,7 +694,7 @@
       '</div>';
 
     html += '<div class="chips chips--scroll" style="margin-bottom:8px">';
-    [['exclude', '생활비만'], ['all', '전체'], ['only', '💍 결혼만']].forEach(function (o) {
+    [['exclude', '생활비만'], ['all', '전체'], ['only', '💍 결혼만'], ['sep', '🧾 별도만']].forEach(function (o) {
       html += '<button class="chip' + (state.filter.wedding === o[0] ? ' is-on' : '') +
         '" type="button" data-wed="' + o[0] + '">' + o[1] + '</button>';
     });
@@ -874,12 +950,20 @@
   /* ── 결혼/월별 ────────────────────────────────────────────────────────── */
   function planHTML() {
     var w = weddingView();
-    var s = w.summary;
+    var sv = separateView();
     var months = monthlyView();
+    var seg = state.planSeg === 'separate' ? 'separate' : 'wedding';
+    var cur = seg === 'separate' ? sv : w;
+    var s = cur.summary;
     var html = '';
 
-    html += '<section class="wed">' +
-      '<p class="wed__label">결혼준비 누적 지출</p>' +
+    html += '<div class="segmented" id="planSeg">' +
+      '<button type="button" data-planseg="wedding"' + (seg === 'wedding' ? ' class="is-on"' : '') + '>💍 결혼준비</button>' +
+      '<button type="button" data-planseg="separate"' + (seg === 'separate' ? ' class="is-on"' : '') + '>🧾 별도지출</button>' +
+      '</div>';
+
+    html += '<section class="wed' + (seg === 'separate' ? ' wed--sep' : '') + '">' +
+      '<p class="wed__label">' + (seg === 'separate' ? '별도지출 누적 지출' : '결혼준비 누적 지출') + '</p>' +
       '<p class="wed__amount num">' + money(s.spend) + '</p>' +
       '<dl class="wed__grid">' +
       '<div><dt>입금/환급</dt><dd class="num">' + money(s.refund) + '</dd></div>' +
@@ -887,14 +971,23 @@
       '<div><dt>건수</dt><dd class="num">' + n(s.count) + '건</dd></div>' +
       '</dl></section>';
 
-    html += '<div class="card"><div class="card__head"><h2 class="card__title">결혼준비 내역</h2>' +
-      '<span class="card__more">' + w.rows.length + '건</span></div>';
-    if (!w.rows.length) {
-      html += emptyHTML('💍', '결혼준비 기록이 없어요', '입력 탭에서 💍 토글을 켜고 저장하면 여기에 쌓입니다.');
+    html += '<div class="card"><div class="card__head"><h2 class="card__title">' +
+      (seg === 'separate' ? '별도지출 내역' : '결혼준비 내역') + '</h2>' +
+      '<span class="card__more">' + cur.rows.length + '건</span></div>';
+    if (!cur.rows.length) {
+      html += seg === 'separate'
+        ? emptyHTML('🧾', '별도지출 기록이 없어요', '시트1 비고에 #제외 를 달고 #결혼준비 는 달지 않은 지출이 여기에 모입니다.')
+        : emptyHTML('💍', '결혼준비 기록이 없어요', '입력 탭에서 💍 토글을 켜고 저장하면 여기에 쌓입니다.');
     } else {
-      w.rows.forEach(function (t) { html += txRowHTML(t); });
+      cur.rows.forEach(function (t) { html += txRowHTML(t); });
     }
     html += '</div>';
+
+    if (seg === 'separate') {
+      html += '<p class="sync">시트 `별도지출` 탭과 같은 기준(비고에 #제외, #결혼준비 아님) · ' +
+        '앱이 받은 최근 ' + ((state.data && state.data.transactions || []).length) + '건에서 집계<br>' +
+        '내역 수정은 시트1에서 해 주세요 — 앱에서 고치면 #제외 태그가 지워져 생활비로 잡힙니다.</p>';
+    }
 
     // 월별 요약
     var max = 1;
@@ -936,8 +1029,20 @@
 
   /* ── 이벤트 바인딩 ────────────────────────────────────────────────────── */
   function bindView() {
+    qsa('[data-planseg]').forEach(function (el) {
+      if (el.hasAttribute('data-go')) return; // 홈 카드 버튼은 아래 data-go 핸들러가 같이 처리합니다
+      el.addEventListener('click', function () {
+        state.planSeg = el.getAttribute('data-planseg') === 'separate' ? 'separate' : 'wedding';
+        render();
+      });
+    });
+
     qsa('[data-go]').forEach(function (el) {
-      el.addEventListener('click', function () { switchTab(el.getAttribute('data-go')); });
+      el.addEventListener('click', function () {
+        var seg = el.getAttribute('data-planseg');
+        if (seg) state.planSeg = seg === 'separate' ? 'separate' : 'wedding';
+        switchTab(el.getAttribute('data-go'));
+      });
     });
 
     if (state.tab === 'list') bindList();
@@ -1581,5 +1686,16 @@
   else boot();
 
   // 테스트/디버그용 최소 노출
-  window.__pocketLedger = { state: state, refresh: refresh, switchTab: switchTab };
+  window.__pocketLedger = {
+    state: state,
+    refresh: refresh,
+    switchTab: switchTab,
+    isWeddingTx: isWeddingTx,
+    isSeparateTx: isSeparateTx,
+    noteTags: noteTags,
+    deriveSeparate: deriveSeparate,
+    separateView: separateView,
+    txMatches: txMatches,
+    views: { home: homeHTML, list: listHTML, plan: planHTML }
+  };
 })();

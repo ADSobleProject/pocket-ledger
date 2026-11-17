@@ -273,6 +273,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
   display: inline-block; font-size: 10.5px; font-weight: 800; padding: 1px 5px;
   border-radius: 5px; background: var(--pink-soft); color: var(--pink); margin-right: 4px;
 }
+.tx__tag--sep { background: var(--amber-soft); color: var(--amber); }
 .tx__amt { flex: 0 0 auto; text-align: right; font-size: 15px; font-weight: 800; letter-spacing: -.02em; }
 .tx__amt--in { color: var(--blue); }
 .tx__amt small { display: block; font-size: 10.5px; font-weight: 700; color: var(--ink-3); letter-spacing: 0; }
@@ -403,6 +404,29 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .wed__grid div { background: rgba(255, 255, 255, .17); border-radius: 13px; padding: 9px 11px; }
 .wed__grid dt { font-size: 11px; font-weight: 700; opacity: .8; }
 .wed__grid dd { font-size: 14px; font-weight: 800; margin-top: 2px; letter-spacing: -.02em; }
+.wed--sep {
+  background: linear-gradient(150deg, #F5A623 0%, #E08C0B 55%, #B36E06 100%);
+  box-shadow: 0 14px 30px rgba(179, 110, 6, .24);
+}
+.wed--sep::after { content: "🧾"; }
+
+/* 홈 · 생활비에서 빼는 지출 목록 */
+.excl {
+  width: 100%; display: flex; align-items: center; gap: 11px; text-align: left;
+  padding: 11px 0; border: 0; background: none;
+}
+.excl + .excl { border-top: 1px solid #F1F3F6; }
+.excl:active { opacity: .6; }
+.excl__icon {
+  flex: 0 0 auto; width: 36px; height: 36px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+  background: var(--pink-soft);
+}
+.excl--separate .excl__icon { background: var(--amber-soft); }
+.excl__body { flex: 1 1 auto; min-width: 0; display: block; }
+.excl__t { display: block; font-size: 14px; font-weight: 800; letter-spacing: -.015em; }
+.excl__d { display: block; font-size: 11.5px; color: var(--ink-3); font-weight: 700; margin-top: 1px; }
+.excl__more { flex: 0 0 auto; color: var(--ink-3); font-size: 18px; font-weight: 700; }
 
 .mrow { padding: 14px 0; }
 .mrow + .mrow { border-top: 1px solid #F1F3F6; }
