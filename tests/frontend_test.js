@@ -35,6 +35,11 @@ var WEDDING = {
   row: 115, date: '2026-11-14', time: '10:00', merchant: '탁연지', type: '출금',
   amount: 1650000, method: '국민계좌', category: '기타지출', note: '드레스 · #결혼준비 #제외', mailId: ''
 };
+/* 결혼준비 탭 두 번째 행 (11-15 몽펠리에 계약금) — 11월 결혼준비 누적 2,150,000원 = 1,650,000 + 500,000 */
+var WEDDING_DEPOSIT = {
+  date: '2026-11-15', time: '16:20', merchant: '몽펠리에', type: '출금',
+  amount: 500000, method: '국민계좌', category: '기타지출', note: '예식장 계약금 · #결혼준비 #제외'
+};
 var GROCERY = {
   row: 114, date: '2026-11-16', time: '19:02', merchant: '이마트 에브리데이', type: '출금',
   amount: 32000, method: 'KB국민', category: '생활/마트', note: '', mailId: ''
@@ -207,9 +212,9 @@ check('separateView: 백엔드가 separate 를 내려 주면 그 값을 쓴다(�
 /* ── 6. 화면 렌더 ────────────────────────────────────────────────────────── */
 PL.state.data = {
   period: { month: '2026-11', daysLeft: 12 },
-  budget: { period: { month: '2026-11', daysLeft: 12 }, rows: [], total: { budget: 1310000, spent: 678888 } },
-  monthly: [{ month: '2026-11', income: 2858322, expense: 678888, net: 2179434, rate: 76.25, count: 47 }],
-  wedding: { summary: { spend: 2150000, refund: 0, net: 2150000, count: 2 }, rows: [WEDDING] },
+  budget: { period: { month: '2026-11', daysLeft: 12 }, rows: [], total: { budget: 1310000, spent: 680788 } },
+  monthly: [{ month: '2026-11', income: 2858322, expense: 680788, net: 2177534, rate: 76.25, count: 47 }],
+  wedding: { summary: { spend: 2150000, refund: 0, net: 2150000, count: 2 }, rows: [WEDDING, WEDDING_DEPOSIT] },
   transactions: ALL5
 };
 
@@ -309,6 +314,125 @@ check('내역: 충전 행은 앱에서 수정할 수 없다(#제외 태그 보�
   PL.state.filter = { q: '', cat: '', wedding: 'all' };
   hasNot(PL.views.list(), 'data-txrow="119"', '충전 행에 수정 버튼이 붙으면 안 됨');
   PL.state.filter = { q: '', cat: '', wedding: 'exclude' };
+});
+
+/* ── 6-2. 이번 달 실지출(생활비 + 결혼준비 + 별도지출) ────────────────────── */
+var HOME_DATA = PL.state.data;
+
+check('monthSum: 해당 월 행만 골라 출금·입금·순액을 낸다', function () {
+  eq(PL.monthSum([INSURANCE, WEDDING], '2026-10'), { spend: 0, refund: 0, net: 0, count: 0 });
+  eq(PL.monthSum([INSURANCE, TRAVEL_REFUND, WEDDING], '2026-11'),
+    { spend: 640080 + 1650000, refund: 40080, net: 2250000, count: 3 });
+  eq(PL.monthSum([], '2026-11').count, 0);
+  eq(PL.monthSum(null, '2026-11').net, 0);
+});
+
+check("monthSum: '#충전 #제외' 행은 어느 쪽에도 더하지 않는다", function () {
+  eq(PL.monthSum([KAKAO_CHARGE, KAKAO_CLOUD], '2026-11'), { spend: 1900, refund: 0, net: 1900, count: 1 });
+});
+
+check('actualView: 이번 달 실지출 = 생활비 + 결혼준비 + 별도지출', function () {
+  var a = PL.actualView();
+  eq(a.month, '2026-11');
+  eq(a.living, 680788, '예산 시트의 이번 달 생활비');
+  eq(a.wedding, 2150000, '11월 결혼준비 2건');
+  eq(a.separate, 640080, '11월 별도지출 1건');
+  eq(a.total, 3470868, '11월 실지출 합계');
+});
+
+check('actualView: 실제 순현금 = 이번 달 수입 − 실지출 (마이너스)', function () {
+  var a = PL.actualView();
+  eq(a.income, 2858322);
+  eq(a.net, -612546);
+});
+
+check("#충전 10,000원은 실지출 총액에 더해지지 않는다", function () {
+  var a = PL.actualView();
+  eq(a.total, 3470868, '충전이 더해지면 3,480,868 이 된다');
+});
+
+check('actualView: 지난달 결혼준비·별도지출은 이번 달 실지출에서 뺀다', function () {
+  var saved = PL.state.data;
+  PL.state.data = {
+    budget: saved.budget,
+    monthly: saved.monthly,
+    wedding: {
+      summary: saved.wedding.summary,
+      rows: saved.wedding.rows.concat([
+        { date: '2026-10-20', merchant: '예식장 중도금', type: '출금', amount: 300000, category: '기타지출', note: '#결혼준비 #제외' }
+      ])
+    },
+    transactions: saved.transactions.concat([
+      { date: '2026-10-21', merchant: '연납 보험', type: '출금', amount: 500000, category: '금융/보험', note: '#제외' }
+    ])
+  };
+  var a = PL.actualView();
+  eq(a.wedding, 2150000, '10월 결혼준비 300,000원 제외');
+  eq(a.separate, 640080, '10월 별도지출 500,000원 제외');
+  eq(a.total, 3470868);
+  PL.state.data = saved;
+});
+
+check('actualView: 예산 시트가 비어 있으면 시트1 내역으로 생활비를 추정한다', function () {
+  var saved = PL.state.data;
+  PL.state.data = { period: { month: '2026-11' }, monthly: saved.monthly, wedding: saved.wedding, transactions: saved.transactions };
+  var a = PL.actualView();
+  eq(a.living, 33900, '일반 32,000 + 카카오톡 클라우드 1,900 (#제외 빠짐)');
+  eq(a.total, 33900 + 2150000 + 640080);
+  PL.state.data = saved;
+});
+
+check('홈: 히어로는 «생활비»로 표시하고 예산 기준임을 밝힌다', function () {
+  var html = PL.views.home();
+  has(html, '2026년 11월 생활비');
+  has(html, '예산 기준');
+  hasNot(html, '총 지출');
+});
+
+check('홈: 실지출 카드에 총액과 구성 3가지가 한눈에 나온다', function () {
+  var html = PL.views.home();
+  has(html, '11월 실지출');
+  has(html, '₩3,470,868');
+  has(html, '생활비 + 결혼준비 + 별도지출');
+  has(html, '₩680,788');
+  has(html, '₩2,150,000');
+  has(html, '₩640,080');
+  has(html, '#충전 제외');
+  has(html, 'real__part', '구성 행');
+});
+
+check('홈: 마이너스 실제 순현금은 붉은 경고 톤(is-minus)으로 보여 준다', function () {
+  var html = PL.views.home();
+  has(html, '실제 순현금');
+  has(html, '−₩612,546');
+  has(html, 'real__net is-minus');
+  has(html, '더 나갔어요');
+});
+
+check('홈: 순현금이 플러스면 is-plus 로 표시하고 경고는 띄우지 않는다', function () {
+  var saved = PL.state.data;
+  PL.state.data = {
+    budget: saved.budget, monthly: [{ month: '2026-11', income: 5000000 }],
+    wedding: saved.wedding, transactions: saved.transactions
+  };
+  var html = PL.views.home();
+  has(html, 'real__net is-plus');
+  has(html, '+₩1,529,132');
+  hasNot(html, '더 나갔어요');
+  PL.state.data = saved;
+});
+
+check('홈: 수입을 모르면 실제 순현금은 — 로 두고 마이너스로 단정하지 않는다', function () {
+  var saved = PL.state.data;
+  PL.state.data = { budget: saved.budget, monthly: [], wedding: saved.wedding, transactions: [] };
+  var html = PL.views.home();
+  has(html, '이번 달 수입을 아직 몰라요');
+  hasNot(html, 'real__net is-minus');
+  PL.state.data = saved;
+});
+
+check('홈: 생활비에서 빼는 지출 카드는 예산 제외지만 실지출엔 포함임을 밝힌다', function () {
+  has(PL.views.home(), '누적 · 실지출엔 포함');
 });
 
 /* ── 7. 행 날짜 표시 ─────────────────────────────────────────────────────── */

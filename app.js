@@ -358,6 +358,68 @@
     return { summary: w.summary || { spend: 0, refund: 0, net: 0, count: 0 }, rows: w.rows || [] };
   }
 
+  function monthOf(date) {
+    return String(date == null ? '' : date).slice(0, 7);
+  }
+
+  // 해당 월(YYYY-MM) 행만 골라 출금 합계 · 입금 합계 · 순액 · 건수를 냅니다.
+  // '#충전' 은 페이 잔액으로 옮긴 돈이라 어느 쪽에도 더하지 않습니다.
+  function monthSum(rows, ym) {
+    var out = { spend: 0, refund: 0, net: 0, count: 0 };
+    (rows || []).forEach(function (t) {
+      if (!t || monthOf(t.date) !== ym) return;
+      if (isChargeTx(t)) return;
+      var amt = n(t.amount);
+      if (t.type === '입금') out.refund += amt;
+      else out.spend += amt;
+      out.count += 1;
+    });
+    out.net = out.spend - out.refund;
+    return out;
+  }
+
+  /* ── 이번 달 실지출 ──────────────────────────────────────────────────────
+     홈에서 «생활비»(예산 기준)만 보면 실제로 줄어든 돈을 놓치기 쉽습니다.
+     그래서 생활비 + 결혼준비 + 별도지출을 한 번에 더해 «실지출» 로 보여 줍니다.
+     · 생활비   = 예산 시트가 계산한 이번 달 생활비 지출 (#제외 는 이미 빠져 있음)
+     · 결혼준비 = 결혼준비 탭 행 중 이번 달분 — 입금/환급은 빼고 순액
+     · 별도지출 = 별도지출 탭 행 중 이번 달분 — '#충전' 은 이미 빠져 있음
+     · 실제 순현금 = 이번 달 수입 − 이번 달 실지출  (수입을 모르면 null)
+     '#충전' 10,000원은 잔액으로 옮긴 돈이라 생활비에도, 실지출에도 더하지 않습니다. */
+  function actualView() {
+    var d = state.data || {};
+    var bv = budgetView();
+    var ym = bv.month || todayISO().slice(0, 7);
+    var w = monthSum(weddingView().rows, ym);
+    var s = monthSum(separateView().rows, ym);
+
+    // 생활비는 예산 시트 집계를 그대로 씁니다(없으면 budgetView 가 시트1 최근 내역으로 추정).
+    var living = n(bv.spent);
+    var total = living + w.net + s.net;
+
+    var cur = currentMonthRow();
+    var income = cur ? n(cur.income) : 0;
+    if (!income) {
+      (d.transactions || []).forEach(function (t) {
+        if (monthOf(t.date) !== ym) return;
+        if (t.type !== '입금' || isWeddingTx(t)) return; // 결혼준비 환급은 수입이 아님
+        income += n(t.amount);
+      });
+    }
+
+    return {
+      month: ym,
+      living: living,
+      wedding: w.net,
+      weddingCount: w.count,
+      separate: s.net,
+      separateCount: s.count,
+      total: total,
+      income: income,
+      net: income > 0 ? income - total : null
+    };
+  }
+
   /* ── 잠금 화면 ────────────────────────────────────────────────────────── */
   function showLock(message) {
     $('main').hidden = true;
@@ -555,7 +617,7 @@
     var html = '';
 
     html += '<section class="hero">';
-    html += '<p class="hero__label">' + esc(monthLabel(bv.month)) + ' 총 지출</p>';
+    html += '<p class="hero__label">' + esc(monthLabel(bv.month)) + ' 생활비 <span class="hero__basis">예산 기준</span></p>';
     html += '<p class="hero__amount num">' + money(bv.spent) + '</p>';
     html += '<p class="hero__budget">예산 <b class="num">' + money(bv.budget) + '</b> 중 <b class="num">' + pct(bv.rate) + '</b> 사용</p>';
     html += '<div class="gauge">';
@@ -571,6 +633,9 @@
       (cur ? money(cur.income) : '—') + '</dd></div>';
     html += '</dl>';
     html += '</section>';
+
+    // 이번 달 실지출 — 생활비만 보면 실제로 줄어든 돈을 놓치므로 히어로 바로 아래에 따로 분리
+    html += realCardHTML(bv);
 
     // 카테고리별 예산
     html += '<div class="card"><div class="card__head"><h2 class="card__title">카테고리별 예산</h2>' +
@@ -596,15 +661,60 @@
     }
     html += '</div>';
 
-    // 생활비 집계에서 빼는 지출 (결혼준비 · 별도지출)
+    // 생활비 집계에서 빼는 지출 (결혼준비 · 별도지출) — 예산에서는 빠지지만 실지출에는 들어갑니다
     var sv = separateView();
     html += '<div class="card"><div class="card__head"><h2 class="card__title">생활비에서 빼는 지출</h2>' +
-      '<span class="card__more">예산 집계 제외</span></div>';
+      '<span class="card__more">누적 · 실지출엔 포함</span></div>';
     html += exclRowHTML('💍', '결혼준비', w.summary, 'wedding');
     html += exclRowHTML('🧾', '별도지출', sv.summary, 'separate');
     html += '</div>';
 
     html += '<p class="sync">' + esc(syncLine()) + '</p>';
+    return html;
+  }
+
+  function realPartHTML(icon, label, amount) {
+    return '<div class="real__part"><dt>' +
+      (icon ? '<span class="real__ico">' + icon + '</span>' : '') +
+      '<span>' + esc(label) + '</span></dt>' +
+      '<dd class="num">' + money(amount) + '</dd></div>';
+  }
+
+  // 홈 히어로 바로 아래의 «이번 달 실지출» 카드 — 생활비와 섮이지 않도록 따로 분리합니다.
+  function realCardHTML(bv) {
+    var a = actualView();
+    var html = '<section class="real">';
+    html += '<div class="real__head"><h2 class="real__label">' + esc(monthLabelShort(a.month)) + ' 실지출</h2>' +
+      '<span class="real__flag">#충전 제외</span></div>';
+    html += '<p class="real__amount num">' + money(a.total) + '</p>';
+    html += '<p class="real__sub">생활비 + 결혼준비 + 별도지출 = 실제로 나간 돈</p>';
+    html += '<dl class="real__parts">';
+    html += realPartHTML('', '생활비', a.living);
+    html += realPartHTML('💍', '결혼준비', a.wedding);
+    html += realPartHTML('🧾', '별도지출', a.separate);
+    html += '</dl>';
+
+    if (a.net === null) {
+      html += '<div class="real__net">' +
+        '<span class="real__net-l">실제 순현금<small>이번 달 수입을 아직 몰라요</small></span>' +
+        '<span class="real__net-v num">—</span></div>';
+    } else {
+      var neg = a.net < 0;
+      html += '<div class="real__net ' + (neg ? 'is-minus' : 'is-plus') + '">' +
+        '<span class="real__net-l">실제 순현금<small>수입 ' + money(a.income) + ' − 실지출</small></span>' +
+        '<span class="real__net-v num">' + (neg ? '−' : '+') + money(a.net) + '</span></div>';
+      if (neg) {
+        html += '<p class="real__warn">번 돈보다 ' + numFmt.format(Math.round(-a.net)) +
+          '원 더 나갔어요. 생활비만 보면 적어 보여도 이번 달 통장은 이만큼 줄었습니다.</p>';
+      }
+    }
+
+    var budgetNote = n(bv && bv.budget) > 0
+      ? '예산 ' + money(bv.budget) + '은 생활비만 봅니다. 결혼준비·별도지출은 예산 밖에서 나간 돈이에요.'
+      : '예산은 생활비만 봅니다. 결혼준비·별도지출은 예산 밖에서 나간 돈이에요.';
+    html += '<p class="real__note">' + esc(budgetNote) +
+      '<br>#충전은 페이 잔액으로 옮긴 돈이라 빼고 셉니다.</p>';
+    html += '</section>';
     return html;
   }
 
@@ -1773,6 +1883,8 @@
     noteTags: noteTags,
     deriveSeparate: deriveSeparate,
     separateView: separateView,
+    monthSum: monthSum,
+    actualView: actualView,
     txMatches: txMatches,
     isComposingEvent: isComposingEvent,
     shortDate: shortDate,
