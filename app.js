@@ -30,6 +30,9 @@
   // 시트 규칙: 비고에 '#제외'가 붙은 행은 생활비 집계에서 빠집니다.
   // 그중 '#결혼준비'가 아닌 것을 앱에서는 '별도지출'로 따로 모아 보여 줍니다.
   var EXCLUDE_TAG = '#제외';
+  // '#충전'(카카오페이·네이버페이 충전처럼 쓴 돈이 아니라 페이 잔액으로 옮긴 돈)은
+  // 시트 «별도지출» 탭과 똑같이 별도지출로도 잡지 않습니다. 생활비에서도 빠지므로 '전체'에서만 보입니다.
+  var CHARGE_TAG = '#충전';
 
   var state = {
     url: '',
@@ -241,10 +244,18 @@
     return /#결혼준비/.test(String((t && t.note) || ''));
   }
 
-  // #제외 는 달렸지만 #결혼준비 는 아닌 지출 = 별도지출(연납 보험료처럼 생활비에서 빼는 특별지출)
+  function isChargeTx(t) {
+    return String((t && t.note) || '').indexOf(CHARGE_TAG) >= 0;
+  }
+
+  // 비고에 #제외 가 붙은 모든 행 = 생활비 집계에서 빠지는 지출 (결혼준비 · 별도지출 · 충전)
+  function isExcludedTx(t) {
+    return String((t && t.note) || '').indexOf(EXCLUDE_TAG) >= 0;
+  }
+
+  // #제외 는 달렸지만 #결혼준비 도 #충전 도 아닌 지출 = 별도지출(연납 보험료처럼 생활비에서 빼는 특별지출)
   function isSeparateTx(t) {
-    var note = String((t && t.note) || '');
-    return note.indexOf(EXCLUDE_TAG) >= 0 && !isWeddingTx(t);
+    return isExcludedTx(t) && !isWeddingTx(t) && !isChargeTx(t);
   }
 
   // 비고에서 태그만 뽑습니다 (#결혼준비 · #제외 는 화면에 보여 주지 않음).
@@ -292,7 +303,7 @@
       var ym = period.month || (todayISO().slice(0, 7));
       var sum = 0;
       (d.transactions || []).forEach(function (t) {
-        if (String(t.date || '').slice(0, 7) === ym && t.type !== '입금' && !isWeddingTx(t) && !isSeparateTx(t)) sum += n(t.amount);
+        if (String(t.date || '').slice(0, 7) === ym && t.type !== '입금' && !isExcludedTx(t)) sum += n(t.amount);
       });
       spent = sum;
     }
@@ -626,7 +637,8 @@
     var w = isWeddingTx(t);
     var sep = isSeparateTx(t);
     var row = Number(t.row);
-    var tappable = isFinite(row) && row >= 2 && !sep; // 별도지출은 앱 수정 시 #제외 태그가 지워져 시트에서 직접 고칩니다
+    // 별도지출 · 충전은 앱에서 고치면 #제외 태그가 지워져 생활비(지출)로 잡히므로 시트에서 직접 고칩니다.
+    var tappable = isFinite(row) && row >= 2 && !sep && !isChargeTx(t);
     // opts.date — 날짜 묶음(daygroup)이 없는 목록에서 행마다 날짜를 붙입니다.
     var dateText = opts.date ? shortDate(t.date) : '';
     var meta = [];
@@ -681,8 +693,8 @@
     f = f || {};
     var isW = isWeddingTx(t);
     var isSep = isSeparateTx(t);
-    // '생활비만' = #제외 가 붙지 않은 모든 거래 (결혼준비 + 별도지출 모두 빠짐)
-    if (f.wedding === 'exclude' && (isW || isSep)) return false;
+    // '생활비만' = #제외 가 붙지 않은 모든 거래 (결혼준비 + 별도지출 + 충전 모두 빠짐)
+    if (f.wedding === 'exclude' && isExcludedTx(t)) return false;
     if (f.wedding === 'only' && !isW) return false;
     if (f.wedding === 'sep' && !isSep) return false;
     if (f.cat && t.category !== f.cat) return false;
@@ -1006,7 +1018,7 @@
       '<span class="card__more">' + cur.rows.length + '건</span></div>';
     if (!cur.rows.length) {
       html += seg === 'separate'
-        ? emptyHTML('🧾', '별도지출 기록이 없어요', '시트1 비고에 #제외 를 달고 #결혼준비 는 달지 않은 지출이 여기에 모입니다.')
+        ? emptyHTML('🧾', '별도지출 기록이 없어요', '시트1 비고에 #제외 를 달고 #결혼준비 · #충전 은 달지 않은 지출이 여기에 모입니다.')
         : emptyHTML('💍', '결혼준비 기록이 없어요', '입력 탭에서 💍 토글을 켜고 저장하면 여기에 쌓입니다.');
     } else {
       // 날짜 묶음(daygroup)이 없는 목록이라 행마다 날짜를 붙입니다.
@@ -1015,7 +1027,7 @@
     html += '</div>';
 
     if (seg === 'separate') {
-      html += '<p class="sync">시트 «별도지출» 탭과 같은 기준(비고에 #제외, #결혼준비 아님) · ' +
+      html += '<p class="sync">시트 «별도지출» 탭과 같은 기준(비고에 #제외, #결혼준비 · #충전 아님) · ' +
         '앱이 받은 최근 ' + ((state.data && state.data.transactions || []).length) + '건에서 집계<br>' +
         '내역 수정은 시트1에서 해 주세요 — 앱에서 고치면 #제외 태그가 지워져 생활비로 잡힙니다.</p>';
     }
@@ -1756,6 +1768,8 @@
     switchTab: switchTab,
     isWeddingTx: isWeddingTx,
     isSeparateTx: isSeparateTx,
+    isChargeTx: isChargeTx,
+    isExcludedTx: isExcludedTx,
     noteTags: noteTags,
     deriveSeparate: deriveSeparate,
     separateView: separateView,

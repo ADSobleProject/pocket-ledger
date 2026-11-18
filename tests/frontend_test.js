@@ -43,6 +43,17 @@ var TRAVEL_REFUND = {
   row: 113, date: '2026-11-15', time: '09:10', merchant: '한화손해보험 환급', type: '입금',
   amount: 40080, method: 'KB국민', category: '기타수입', note: '보험료 일부 환급 #제외', mailId: ''
 };
+/* 실제 시트1 119·120행 (2026-11-18 09:04 카카오페이 자동충전 · 카카오톡 클라우드 실결제) */
+var KAKAO_CHARGE = {
+  row: 119, date: '2026-11-18', time: '09:04', merchant: '카카오페이 충전', type: '출금',
+  amount: 10000, method: 'KB국민(507802-**-***249)', category: '기타지출',
+  note: '카카오톡 클라우드 1,900원 결제용 · #충전 #제외 · 잔액 4,446,569원', mailId: '1a1ebf808df39b17'
+};
+var KAKAO_CLOUD = {
+  row: 120, date: '2026-11-18', time: '09:04', merchant: '카카오톡 클라우드', type: '출금',
+  amount: 1900, method: '카카오페이', category: '주거/통신',
+  note: '자동충전 10,000원 중 실결제 · 페이 잔액 +8,100원', mailId: '1a1ebf808df39b17-cloud'
+};
 
 /* ── 1. 태그 판정 ────────────────────────────────────────────────────────── */
 check('isSeparateTx: #제외 만 있고 #결혼준비 가 없으면 별도지출이다', function () {
@@ -57,6 +68,21 @@ check('isSeparateTx: #결혼준비 #제외 는 결혼준비이므로 별도지�
 check('isSeparateTx: 태그 없는 일반 지출은 false', function () {
   eq(PL.isSeparateTx(GROCERY), false);
   eq(PL.isSeparateTx(WEDDING), false);
+});
+
+check("isSeparateTx: '#충전 #제외' 는 별도지출이 아니다 (시트 별도지출 탭과 동일)", function () {
+  eq(PL.isSeparateTx(KAKAO_CHARGE), false);
+  eq(PL.isChargeTx(KAKAO_CHARGE), true);
+  eq(PL.isExcludedTx(KAKAO_CHARGE), true, '생활비 집계에서는 빠져야 함');
+});
+
+check("isChargeTx: '#충전' 태그가 없으면 충전으로 보지 않는다", function () {
+  eq(PL.isChargeTx(KAKAO_CLOUD), false, '"자동충전 10,000원 중 실결제" 는 #충전 태그가 아님');
+  eq(PL.isSeparateTx(KAKAO_CLOUD), false);
+  eq(PL.isExcludedTx(KAKAO_CLOUD), false, '실결제는 생활비에 남는다');
+  eq(PL.isChargeTx(GROCERY), false);
+  eq(PL.isChargeTx({}), false);
+  eq(PL.isChargeTx(null), false);
 });
 
 check('isSeparateTx: note 가 없거나 비어도 안전하다', function () {
@@ -91,6 +117,17 @@ check('deriveSeparate: 입금(환급)도 별도지출로 잡혀 순 지출에서
   eq(out.summary, { spend: 640080, refund: 40080, net: 600000, count: 2 });
 });
 
+check('deriveSeparate: 가맹점 이름이 "충전" 이어도 #충전 태그가 없으면 일반 지출로 남는다', function () {
+  var out = PL.deriveSeparate([KAKAO_CLOUD]);
+  eq(out.summary.count, 0);
+});
+
+check('deriveSeparate: #충전 #제외 는 별도지출 합계·건수에서 빠진다', function () {
+  var out = PL.deriveSeparate([INSURANCE, WEDDING, GROCERY, KAKAO_CHARGE, KAKAO_CLOUD]);
+  eq(out.summary, { spend: 640080, refund: 0, net: 640080, count: 1 });
+  eq(out.rows.map(function (t) { return t.row; }), [116]);
+});
+
 check('deriveSeparate: 해당 거래가 없으면 0건 · 0원', function () {
   eq(PL.deriveSeparate([WEDDING, GROCERY]).summary, { spend: 0, refund: 0, net: 0, count: 0 });
   eq(PL.deriveSeparate([]).rows.length, 0);
@@ -117,6 +154,25 @@ check("txMatches '결혼만'은 #결혼준비 만 남긴다", function () {
 
 check("txMatches '별도만'은 별도지출만 남긴다", function () {
   eq(only({ wedding: 'sep' }), [116]);
+});
+
+/* #충전 #제외 까지 포함한 목록 */
+var ALL5 = ALL.concat([KAKAO_CHARGE, KAKAO_CLOUD]);
+function only5(f) {
+  return ALL5.filter(function (t) { return PL.txMatches(t, f); }).map(function (t) { return t.row; });
+}
+
+check("txMatches '생활비만'은 #충전 #제외 도 뺀다 (시트 생활비와 동일)", function () {
+  eq(only5({ wedding: 'exclude' }), [114, 120], '일반 지출 + 충전으로 산 실결제만');
+});
+
+check("txMatches '별도만'에도 #충전 #제외 는 섞이지 않는다", function () {
+  eq(only5({ wedding: 'sep' }), [116]);
+});
+
+check("txMatches '전체'에서만 #충전 #제외 가 보인다", function () {
+  eq(only5({ wedding: 'all' }), [116, 115, 114, 119, 120]);
+  eq(only5({ wedding: 'only' }), [115]);
 });
 
 check('txMatches: 카테고리 · 검색어 조건이 함께 걸린다', function () {
@@ -154,7 +210,7 @@ PL.state.data = {
   budget: { period: { month: '2026-11', daysLeft: 12 }, rows: [], total: { budget: 1310000, spent: 678888 } },
   monthly: [{ month: '2026-11', income: 2858322, expense: 678888, net: 2179434, rate: 76.25, count: 47 }],
   wedding: { summary: { spend: 2150000, refund: 0, net: 2150000, count: 2 }, rows: [WEDDING] },
-  transactions: ALL
+  transactions: ALL5
 };
 
 check('홈: 생활비에서 빼는 지출 카드에 별도지출 합계가 나온다', function () {
@@ -216,6 +272,43 @@ check('결혼/월별: 별도지출 화면에 시트 직접 수정 안내가 나�
   PL.state.planSeg = 'separate';
   has(PL.views.plan(), '시트1에서 해 주세요');
   PL.state.planSeg = 'wedding';
+});
+
+check("결혼/월별: 별도지출 화면에 #충전 은 나오지 않는다(합계 640,080원 · 1건 그대로)", function () {
+  PL.state.planSeg = 'separate';
+  var html = PL.views.plan();
+  has(html, '₩640,080');
+  has(html, '#자동차보험');
+  hasNot(html, '카카오페이 충전', '별도지출에서 충전은 빠져야 함');
+  hasNot(html, '₩650,080', '충전 10,000원이 더해지면 안 됨');
+  PL.state.planSeg = 'wedding';
+});
+
+check('홈: 별도지출 카드는 640,080원 · 1건 그대로다(충전은 카운트하지 않음)', function () {
+  var html = PL.views.home();
+  has(html, '₩640,080 · 1건');
+});
+
+check('내역: 생활비만 화면에도 별도만 화면에도 충전은 없다', function () {
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude' };
+  var html = PL.views.list();
+  hasNot(html, '카카오페이 충전', '생활비만에서 충전은 빠져야 함');
+  has(html, '카카오톡 클라우드', '충전으로 산 실결제는 생활비에 남는다');
+  PL.state.filter = { q: '', cat: '', wedding: 'sep' };
+  hasNot(PL.views.list(), '카카오페이 충전');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude' };
+});
+
+check('내역: 전체 화면에서만 충전 행이 보인다', function () {
+  PL.state.filter = { q: '', cat: '', wedding: 'all' };
+  has(PL.views.listResults(), '카카오페이 충전');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude' };
+});
+
+check('내역: 충전 행은 앱에서 수정할 수 없다(#제외 태그 보존)', function () {
+  PL.state.filter = { q: '', cat: '', wedding: 'all' };
+  hasNot(PL.views.list(), 'data-txrow="119"', '충전 행에 수정 버튼이 붙으면 안 됨');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude' };
 });
 
 /* ── 7. 행 날짜 표시 ─────────────────────────────────────────────────────── */
