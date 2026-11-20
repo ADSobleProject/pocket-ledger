@@ -42,7 +42,7 @@
     tab: 'home',
     loading: false,
     offline: false,
-    filter: { q: '', cat: '', wedding: 'exclude' },
+    filter: { q: '', cat: '', wedding: 'exclude', month: '' },
     planSeg: 'wedding', // 'wedding' | 'separate'
     form: null,
     saved: null
@@ -378,6 +378,57 @@
     return out;
   }
 
+  /* ── 현재 잔액 ────────────────────────────────────────────────────────────
+     KB 결제 알림 메일이 적어 준 비고에는 결제 직후 계좌 잔액이 «잔액 3,891,369원»
+     처럼 함께 들어옵니다. 그중 날짜·시각이 가장 늦은 행의 잔액을 홈 «현재 잔액»
+     으로 보여 줍니다.  (백엔드 변경 없이 프론트엔드만으로 동작)
+     · '페이 잔액 +8,100원' 처럼 페이 잔액은 계좌 잔액이 아니므로 건너뜁니다.
+     · 잔액은 마지막 결제 시점의 값이라 그 뒤 입출금은 반영되지 않았을 수 있습니다. */
+  var BALANCE_RE = /잔액\s*([0-9][0-9,]*)\s*원/g;
+
+  // 한 행의 비고에서 계좌 잔액을 뽑습니다. 없으면 null.
+  function noteBalance(t) {
+    var note = String((t && t.note) || '');
+    BALANCE_RE.lastIndex = 0;
+    var m;
+    while ((m = BALANCE_RE.exec(note))) {
+      var before = note.slice(Math.max(0, m.index - 4), m.index);
+      if (/페이\s*$/.test(before)) continue; // 페이 잔액은 계좌 잔액이 아님
+      return n(m[1]);
+    }
+    return null;
+  }
+
+  // 결제수단에서 가린 카드번호 괄호를 떼어 냅니다 — 'KB국민(507802-**-***249)' → 'KB국민'
+  function methodLabel(method) {
+    var s = String(method || '').trim();
+    var stripped = s.replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+    return stripped || s;
+  }
+
+  function txStamp(t) {
+    return String((t && t.date) || '').slice(0, 10) + ' ' + String((t && t.time) || '').slice(0, 5);
+  }
+
+  // 가장 최근(날짜+시각) 잔액 행. 잔액이 적힌 행이 없으면 null.
+  function balanceView() {
+    var rows = (state.data && state.data.transactions) || [];
+    var best = null, bestKey = '';
+    rows.forEach(function (t) {
+      var amt = noteBalance(t);
+      if (amt === null || !isFinite(amt)) return;
+      var key = txStamp(t);
+      if (!best || key > bestKey) { best = t; bestKey = key; }
+    });
+    if (!best) return null;
+    return {
+      amount: noteBalance(best),
+      date: String(best.date || '').slice(0, 10),
+      time: String(best.time || '').slice(0, 5),
+      method: methodLabel(best.method)
+    };
+  }
+
   /* ── 이번 달 실지출 ──────────────────────────────────────────────────────
      홈에서 «생활비»(예산 기준)만 보면 실제로 줄어든 돈을 놓치기 쉽습니다.
      그래서 생활비 + 결혼준비 + 별도지출을 한 번에 더해 «실지출» 로 보여 줍니다.
@@ -616,6 +667,9 @@
 
     var html = '';
 
+    // 현재 잔액 — 이번 달 흐름(생활비·실지출)과 섞이지 않도록 맨 위에 따로 둡니다.
+    html += balanceHTML();
+
     html += '<section class="hero">';
     html += '<p class="hero__label">' + esc(monthLabel(bv.month)) + ' 생활비 <span class="hero__basis">예산 기준</span></p>';
     html += '<p class="hero__amount num">' + money(bv.spent) + '</p>';
@@ -673,6 +727,23 @@
     return html;
   }
 
+  // 홈 맨 위 «현재 잔액» 띠 — 통장에 지금 남은 돈(마지막 결제 알림 기준)
+  function balanceHTML() {
+    var b = balanceView();
+    if (!b) return '';
+    var when = shortDate(b.date) + (b.time ? ' ' + b.time : '') + ' 기준';
+    var html = '<section class="bal">';
+    html += '<div class="bal__head"><h2 class="bal__label">💰 현재 잔액</h2>' +
+      '<span class="bal__when num">' + esc(when) + '</span></div>';
+    html += '<p class="bal__amount num">' + money(b.amount) + '</p>';
+    html += '<p class="bal__sub">' +
+      esc(b.method ? b.method + ' 결제 알림에 적힌 계좌 잔액' : '결제 알림에 적힌 계좌 잔액') + '</p>';
+    html += '<p class="bal__hint">이번 달 순현금과 달리 지금 통장에 남은 돈이에요. ' +
+      '마지막 결제 뒤 입출금은 반영 전일 수 있어요.</p>';
+    html += '</section>';
+    return html;
+  }
+
   function realPartHTML(icon, label, amount) {
     return '<div class="real__part"><dt>' +
       (icon ? '<span class="real__ico">' + icon + '</span>' : '') +
@@ -680,7 +751,7 @@
       '<dd class="num">' + money(amount) + '</dd></div>';
   }
 
-  // 홈 히어로 바로 아래의 «이번 달 실지출» 카드 — 생활비와 섮이지 않도록 따로 분리합니다.
+  // 홈 히어로 바로 아래의 «이번 달 실지출» 카드 — 생활비와 섞이지 않도록 따로 분리합니다.
   function realCardHTML(bv) {
     var a = actualView();
     var html = '<section class="real">';
@@ -807,6 +878,7 @@
     if (f.wedding === 'exclude' && isExcludedTx(t)) return false;
     if (f.wedding === 'only' && !isW) return false;
     if (f.wedding === 'sep' && !isSep) return false;
+    if (f.month && monthOf(t.date) !== f.month) return false;
     if (f.cat && t.category !== f.cat) return false;
     var q = String(f.q || '').trim().toLowerCase();
     if (q) {
@@ -829,8 +901,43 @@
       '</div>';
   }
 
+  // 내역 탭 월별 조회 — 앱이 받은 거래에 실제로 있는 달만 최신순으로 만듭니다.
+  function txMonths() {
+    var seen = {}, out = [];
+    ((state.data && state.data.transactions) || []).forEach(function (t) {
+      var ym = monthOf(t.date);
+      if (!/^\d{4}-\d{2}$/.test(ym) || seen[ym]) return;
+      seen[ym] = true;
+      out.push(ym);
+    });
+    out.sort(function (a, b) { return b.localeCompare(a); }); // 최신 달 먼저
+    return out;
+  }
+
+  // 월 칩 이름 — 올해는 '11월', 다른 해는 '25년 12월'
+  function monthChipLabel(ym) {
+    var m = String(ym || '').match(/^(\d{4})-(\d{2})$/);
+    if (!m) return String(ym || '');
+    var y = Number(m[1]), mm = Number(m[2]);
+    return y === new Date().getFullYear() ? mm + '월' : String(y).slice(2) + '년 ' + mm + '월';
+  }
+
   function listChipsHTML() {
     var html = '';
+    var months = txMonths();
+
+    // 월별 필터 — '모든 달'이 기본(기존 동작 그대로)
+    if (months.length > 1) {
+      html += '<div class="chips chips--scroll" style="margin-bottom:8px" id="monthChips">';
+      html += '<button class="chip' + (!state.filter.month ? ' is-on' : '') +
+        '" type="button" data-month="">모든 달</button>';
+      months.forEach(function (ym) {
+        html += '<button class="chip' + (state.filter.month === ym ? ' is-on' : '') +
+          '" type="button" data-month="' + esc(ym) + '">' + esc(monthChipLabel(ym)) + '</button>';
+      });
+      html += '</div>';
+    }
+
     html += '<div class="chips chips--scroll" style="margin-bottom:8px">';
     [['exclude', '생활비만'], ['all', '전체'], ['only', '💍 결혼만'], ['sep', '🧾 별도만']].forEach(function (o) {
       html += '<button class="chip' + (state.filter.wedding === o[0] ? ' is-on' : '') +
@@ -857,7 +964,8 @@
     var html = '';
     html += '<div class="card" style="padding:14px 16px 6px">';
     html += '<div class="card__head" style="margin-bottom:2px">' +
-      '<span class="card__more">' + tx.length + '건</span>' +
+      '<span class="card__more num">' +
+        (state.filter.month ? esc(monthLabel(state.filter.month)) + ' · ' : '') + tx.length + '건</span>' +
       '<span class="card__more num">지출 ' + money(out) + (inc ? ' · 수입 ' + money(inc) : '') + '</span></div>';
 
     if (!tx.length) {
@@ -889,6 +997,8 @@
   }
 
   function listHTML() {
+    // 새로고침으로 그 달 거래가 사라졌으면 월 필터를 «모든 달» 로 돌립니다.
+    if (state.filter.month && txMonths().indexOf(state.filter.month) < 0) state.filter.month = '';
     return listSearchHTML() + listChipsHTML() +
       '<div id="listResults">' + listResultsHTML() + '</div>';
   }
@@ -1266,6 +1376,15 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
       });
     });
+    qsa('[data-month]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        state.filter.month = el.getAttribute('data-month') || '';
+        qsa('[data-month]').forEach(function (b) { b.classList.toggle('is-on', b === el); });
+        updateListResults();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    });
+
     qsa('[data-cat]').forEach(function (el) {
       el.addEventListener('click', function () {
         state.filter.cat = el.getAttribute('data-cat');
@@ -1807,7 +1926,7 @@
           if (!window.confirm('이 기기에서 URL과 PIN, 저장된 캐시를 지웁니다. 시트 데이터는 그대로 남습니다.')) return;
           lsDel(LS.url); lsDel(LS.pin); lsDel(LS.cache); lsDel(LS.tab);
           state.url = ''; state.pin = ''; state.data = null; state.syncedAt = null;
-          state.saved = null; state.form = null; state.filter = { q: '', cat: '', wedding: 'exclude' };
+          state.saved = null; state.form = null; state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
           closeSheet();
           showLock('연결을 해제했습니다.');
         }
@@ -1885,6 +2004,11 @@
     separateView: separateView,
     monthSum: monthSum,
     actualView: actualView,
+    noteBalance: noteBalance,
+    balanceView: balanceView,
+    balanceHTML: balanceHTML,
+    txMonths: txMonths,
+    monthChipLabel: monthChipLabel,
     txMatches: txMatches,
     isComposingEvent: isComposingEvent,
     shortDate: shortDate,

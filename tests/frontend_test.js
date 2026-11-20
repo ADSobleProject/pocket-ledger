@@ -60,6 +60,17 @@ var KAKAO_CLOUD = {
   note: '자동충전 10,000원 중 실결제 · 페이 잔액 +8,100원', mailId: '1a1ebf808df39b17-cloud'
 };
 
+/* 실제 시트1 126행 (2026-11-20 21:47 전북대학교 주차장 · 잔액 3,891,369원) */
+var PARKING = {
+  row: 126, date: '2026-11-20', time: '21:47', merchant: '전북대학교 주차장', type: '출금',
+  amount: 650, method: 'KB국민(507802-**-***249)', category: '교통/차량',
+  note: '주차장 이용료 · 잔액 3,891,369원', mailId: '1a1f8ff8b5e0c610'
+};
+var OCT_LUNCH = {
+  row: 2, date: '2026-10-01', time: '12:53', merchant: '양평해장국효', type: '출금',
+  amount: 35000, method: '국민계좌', category: '식사', note: '', mailId: ''
+};
+
 /* ── 1. 태그 판정 ────────────────────────────────────────────────────────── */
 check('isSeparateTx: #제외 만 있고 #결혼준비 가 없으면 별도지출이다', function () {
   eq(PL.isSeparateTx(INSURANCE), true);
@@ -498,6 +509,123 @@ check('isComposingEvent: 한글 조합 중 입력 이벤트를 가려낸다', fu
   eq(PL.isComposingEvent({ keyCode: 229 }), true, 'Android 구형 키보드');
   eq(PL.isComposingEvent(null), false);
   eq(PL.isComposingEvent(undefined), false);
+});
+
+/* ── 9. 현재 잔액(비고의 '잔액 …원') ────────────────────────────────────── */
+check('noteBalance: 비고의 잔액을 숫자로 읽는다', function () {
+  eq(PL.noteBalance(PARKING), 3891369);
+  eq(PL.noteBalance(INSURANCE), 4472929);
+  eq(PL.noteBalance(WEDDING), null, '잔액이 없는 행은 null');
+  eq(PL.noteBalance(null), null);
+  eq(PL.noteBalance({}), null);
+});
+
+check('noteBalance: 페이 잔액은 계좌 잔액으로 읽지 않는다', function () {
+  eq(PL.noteBalance(KAKAO_CLOUD), null, '"페이 잔액 +8,100원" 은 계좌 잔액이 아님');
+  eq(PL.noteBalance({ note: '페이 잔액 8,100원' }), null);
+  eq(PL.noteBalance({ note: '#제외 · 잔액 4,446,569원' }), 4446569);
+});
+
+check('balanceView: 날짜·시각이 가장 늦은 행의 잔액을 쓴다', function () {
+  var saved = PL.state.data;
+  PL.state.data = { transactions: [KAKAO_CHARGE, INSURANCE, PARKING, GROCERY] };
+  var b = PL.balanceView();
+  eq(b.amount, 3891369, '11/20 21:47 이 가장 최근');
+  eq(b.date, '2026-11-20');
+  eq(b.time, '21:47');
+  eq(b.method, 'KB국민', '가린 카드번호 괄호는 표시하지 않음');
+  PL.state.data = saved;
+});
+
+check('balanceView: 잔액이 적힌 행이 없으면 null(카드를 띄우지 않음)', function () {
+  var saved = PL.state.data;
+  PL.state.data = { transactions: [GROCERY, OCT_LUNCH] };
+  eq(PL.balanceView(), null);
+  hasNot(PL.views.home(), '현재 잔액');
+  PL.state.data = saved;
+});
+
+check('홈: 현재 잔액과 기준 시각이 실지출·순현금과 따로 나온다', function () {
+  var html = PL.views.home();
+  has(html, '현재 잔액');
+  has(html, '₩4,446,569', '11/18 09:04 카카오페이 충전 행의 잔액');
+  has(html, '11/18 09:04 기준');
+  has(html, 'KB국민 결제 알림에 적힌 계좌 잔액');
+  has(html, '이번 달 순현금과 달리', '순현금 카드와 헷갈리지 않게 밝힌다');
+  truthy(html.indexOf('현재 잔액') < html.indexOf('생활비'), '잔액 띠가 히어로 위에 온다');
+});
+
+/* ── 10. 내역 월별 필터 ─────────────────────────────────────────────────── */
+check('txMonths: 거래에 있는 달만 최신순으로 만든다', function () {
+  var saved = PL.state.data;
+  PL.state.data = { transactions: [OCT_LUNCH, PARKING, INSURANCE, OCT_LUNCH] };
+  eq(PL.txMonths(), ['2026-11', '2026-10']);
+  PL.state.data = { transactions: [] };
+  eq(PL.txMonths(), []);
+  PL.state.data = saved;
+});
+
+check('monthChipLabel: 올해는 월만, 다른 해는 연도까지 보여 준다', function () {
+  eq(PL.monthChipLabel('2026-11'), '11월');
+  eq(PL.monthChipLabel('2025-12'), '25년 12월');
+});
+
+var MIX = [OCT_LUNCH, GROCERY, INSURANCE, PARKING];
+function onlyM(f) {
+  return MIX.filter(function (t) { return PL.txMatches(t, f); }).map(function (t) { return t.row; });
+}
+
+check('txMatches: 월 조건이 다른 필터와 함께 걸린다', function () {
+  eq(onlyM({ month: '2026-10' }), [2]);
+  eq(onlyM({ month: '2026-11' }), [114, 116, 126]);
+  eq(onlyM({ month: '2026-11', cat: '교통/차량' }), [126]);
+  eq(onlyM({ month: '2026-11', wedding: 'exclude' }), [114, 126], '별도지출은 생활비만에서 빠짐');
+  eq(onlyM({ month: '' }), [2, 114, 116, 126], '빈 값이면 전체');
+});
+
+check('내역: 월 칩(모든 달 · 11월 · 10월)이 생기고 기본은 모든 달', function () {
+  var saved = PL.state.data;
+  PL.state.data = { transactions: MIX };
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  var html = PL.views.list();
+  has(html, 'data-month=""');
+  has(html, '모든 달');
+  has(html, 'data-month="2026-11"');
+  has(html, 'data-month="2026-10"');
+  eq((html.match(/class="chip is-on"/g) || []).length >= 2, true, '모든 달 + 생활비만 이 켜져 있다');
+  has(html, '>11월<');
+  has(html, '>10월<');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  PL.state.data = saved;
+});
+
+check('내역: 달을 고르면 그 달 행만 남고 머리말에 달이 표시된다', function () {
+  var saved = PL.state.data;
+  PL.state.data = { transactions: MIX };
+  PL.state.filter = { q: '', cat: '', wedding: 'all', month: '2026-10' };
+  var frag = PL.views.listResults();
+  has(frag, '양평해장국효', '10월 행');
+  hasNot(frag, '이마트 에브리데이', '11월 행은 빠져야 함');
+  hasNot(frag, '자동차보험료');
+  has(frag, '2026년 10월 · 1건');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  PL.state.data = saved;
+});
+
+check('내역: 월이 하나뿐이면 월 칩 줄을 그리지 않는다(기존 화면 유지)', function () {
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  hasNot(PL.views.list(), 'data-month=');
+});
+
+check('내역: 검색어 + 월 + 카테고리가 동시에 걸린다', function () {
+  var saved = PL.state.data;
+  PL.state.data = { transactions: MIX };
+  PL.state.filter = { q: '주차', cat: '교통/차량', wedding: 'exclude', month: '2026-11' };
+  has(PL.views.listResults(), '전북대학교 주차장');
+  PL.state.filter = { q: '주차', cat: '교통/차량', wedding: 'exclude', month: '2026-10' };
+  hasNot(PL.views.listResults(), '전북대학교 주차장');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  PL.state.data = saved;
 });
 
 /* ── 결과 출력 ───────────────────────────────────────────────────────────── */
