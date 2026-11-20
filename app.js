@@ -33,6 +33,9 @@
   // '#충전'(카카오페이·네이버페이 충전처럼 쓴 돈이 아니라 페이 잔액으로 옮긴 돈)은
   // 시트 «별도지출» 탭과 똑같이 별도지출로도 잡지 않습니다. 생활비에서도 빠지므로 '전체'에서만 보입니다.
   var CHARGE_TAG = '#충전';
+  // '#저축' · '#적금'(청년희망적금 이체처럼 내 계좌로 옮긴 돈)도 쓴 돈이 아닙니다.
+  // 생활비·별도지출·실지출 어디에도 더하지 않고, 통장에서 빠져나간 사실만 따로 보여 줍니다.
+  var SAVINGS_TAGS = ['#저축', '#적금'];
 
   var state = {
     url: '',
@@ -97,7 +100,8 @@
     var t = new Date();
     var today = new Date(t.getFullYear(), t.getMonth(), t.getDate());
     var diff = Math.round((d - today) / 86400000);
-    var base = (d.getMonth() + 1) + '월 ' + d.getDate() + '일 (' + WD[d.getDay()] + ')';
+    var yearPrefix = d.getFullYear() === t.getFullYear() ? '' : String(d.getFullYear()).slice(2) + '년 ';
+    var base = yearPrefix + (d.getMonth() + 1) + '월 ' + d.getDate() + '일 (' + WD[d.getDay()] + ')';
     if (diff === 0) return '오늘 · ' + base;
     if (diff === -1) return '어제 · ' + base;
     return base;
@@ -107,15 +111,20 @@
     if (!m) return ym || '';
     return m[1] + '년 ' + Number(m[2]) + '월';
   }
+  // 짧은 달 이름 — 올해면 '11월', 다른 해면 '27년 1월' (1월이 '01월' 로 나오지 않게 숫자로 바꿉니다)
   function monthLabelShort(ym) {
     var m = String(ym || '').match(/^(\d{4})-(\d{2})/);
     if (!m) return ym || '';
-    return m[2] + '월';
+    var mm = Number(m[2]);
+    return Number(m[1]) === new Date().getFullYear() ? mm + '월' : String(m[1]).slice(2) + '년 ' + mm + '월';
   }
-  // 목록 행 메타용 짧은 날짜 — 2026-11-16 → 11/16
+  // 목록 행 메타용 짧은 날짜 — 2026-11-16 → 11/16, 다른 해면 26/12/31
   function shortDate(iso) {
     var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (!m) return '';
+    if (Number(m[1]) !== new Date().getFullYear()) {
+      return String(m[1]).slice(2) + '/' + Number(m[2]) + '/' + Number(m[3]);
+    }
     return Number(m[2]) + '/' + Number(m[3]);
   }
 
@@ -248,14 +257,23 @@
     return String((t && t.note) || '').indexOf(CHARGE_TAG) >= 0;
   }
 
-  // 비고에 #제외 가 붙은 모든 행 = 생활비 집계에서 빠지는 지출 (결혼준비 · 별도지출 · 충전)
-  function isExcludedTx(t) {
-    return String((t && t.note) || '').indexOf(EXCLUDE_TAG) >= 0;
+  function isSavingsTx(t) {
+    var note = String((t && t.note) || '');
+    for (var i = 0; i < SAVINGS_TAGS.length; i++) {
+      if (note.indexOf(SAVINGS_TAGS[i]) >= 0) return true;
+    }
+    return false;
   }
 
-  // #제외 는 달렸지만 #결혼준비 도 #충전 도 아닌 지출 = 별도지출(연납 보험료처럼 생활비에서 빼는 특별지출)
+  // 비고에 #제외 가 붙은 모든 행 = 생활비 집계에서 빠지는 지출 (결혼준비 · 별도지출 · 충전 · 저축 이체)
+  // #저축 · #적금 은 #제외 를 같이 적지 않았더라도 쓴 돈이 아니므로 생활비에서 뺍니다.
+  function isExcludedTx(t) {
+    return String((t && t.note) || '').indexOf(EXCLUDE_TAG) >= 0 || isSavingsTx(t);
+  }
+
+  // #제외 는 달렸지만 #결혼준비 · #충전 · #저축 이 아닌 지출 = 별도지출(연납 보험료처럼 생활비에서 빼는 특별지출)
   function isSeparateTx(t) {
-    return isExcludedTx(t) && !isWeddingTx(t) && !isChargeTx(t);
+    return isExcludedTx(t) && !isWeddingTx(t) && !isChargeTx(t) && !isSavingsTx(t);
   }
 
   // 비고에서 태그만 뽑습니다 (#결혼준비 · #제외 는 화면에 보여 주지 않음).
@@ -363,12 +381,12 @@
   }
 
   // 해당 월(YYYY-MM) 행만 골라 출금 합계 · 입금 합계 · 순액 · 건수를 냅니다.
-  // '#충전' 은 페이 잔액으로 옮긴 돈이라 어느 쪽에도 더하지 않습니다.
+  // '#충전'(페이로 옮긴 돈) · '#저축'·'#적금'(내 계좌로 옮긴 돈)은 어느 쪽에도 더하지 않습니다.
   function monthSum(rows, ym) {
     var out = { spend: 0, refund: 0, net: 0, count: 0 };
     (rows || []).forEach(function (t) {
       if (!t || monthOf(t.date) !== ym) return;
-      if (isChargeTx(t)) return;
+      if (isChargeTx(t) || isSavingsTx(t)) return;
       var amt = n(t.amount);
       if (t.type === '입금') out.refund += amt;
       else out.spend += amt;
@@ -435,14 +453,29 @@
      · 생활비   = 예산 시트가 계산한 이번 달 생활비 지출 (#제외 는 이미 빠져 있음)
      · 결혼준비 = 결혼준비 탭 행 중 이번 달분 — 입금/환급은 빼고 순액
      · 별도지출 = 별도지출 탭 행 중 이번 달분 — '#충전' 은 이미 빠져 있음
+     · 저축 이체 = 시트1 의 '#저축'·'#적금' 행 — 쓴 돈이 아니라 실지출에 더하지 않고 따로 보여 줌
      · 실제 순현금 = 이번 달 수입 − 이번 달 실지출  (수입을 모르면 null)
      '#충전' 10,000원은 잔액으로 옮긴 돈이라 생활비에도, 실지출에도 더하지 않습니다. */
+  // 이번 달 저축 이체(#저축 · #적금) — 시트1 최근 내역에서 직접 셉니다.
+  function savingsView(ym) {
+    var out = { spend: 0, refund: 0, net: 0, count: 0 };
+    ((state.data && state.data.transactions) || []).forEach(function (t) {
+      if (!t || monthOf(t.date) !== ym || !isSavingsTx(t)) return;
+      if (t.type === '입금') out.refund += n(t.amount);
+      else out.spend += n(t.amount);
+      out.count += 1;
+    });
+    out.net = out.spend - out.refund;
+    return out;
+  }
+
   function actualView() {
     var d = state.data || {};
     var bv = budgetView();
     var ym = bv.month || todayISO().slice(0, 7);
     var w = monthSum(weddingView().rows, ym);
     var s = monthSum(separateView().rows, ym);
+    var sav = savingsView(ym);
 
     // 생활비는 예산 시트 집계를 그대로 씁니다(없으면 budgetView 가 시트1 최근 내역으로 추정).
     var living = n(bv.spent);
@@ -453,7 +486,7 @@
     if (!income) {
       (d.transactions || []).forEach(function (t) {
         if (monthOf(t.date) !== ym) return;
-        if (t.type !== '입금' || isWeddingTx(t)) return; // 결혼준비 환급은 수입이 아님
+        if (t.type !== '입금' || isWeddingTx(t) || isSavingsTx(t)) return; // 결혼준비 환급·적금 해지금은 수입이 아님
         income += n(t.amount);
       });
     }
@@ -465,6 +498,8 @@
       weddingCount: w.count,
       separate: s.net,
       separateCount: s.count,
+      savings: sav.net,
+      savingsCount: sav.count,
       total: total,
       income: income,
       net: income > 0 ? income - total : null
@@ -688,6 +723,9 @@
     html += '</dl>';
     html += '</section>';
 
+    // 예산 기준 월과 오늘 달이 어긋나면 한 줄 알림 (해 넘어갔을 때 지난달 화면 착시 방지)
+    html += monthSyncNote();
+
     // 이번 달 실지출 — 생활비만 보면 실제로 줄어든 돈을 놓치므로 히어로 바로 아래에 따로 분리
     html += realCardHTML(bv);
 
@@ -744,6 +782,17 @@
     return html;
   }
 
+  // 예산 시트의 «기준 월»(예산 B2 = TODAY())과 오늘 달이 어긋나면 한 줄 알림을 그립니다.
+  // 해가 바뀌거나 기준 월 칸을 손으로 고정했을 때 홈이 지난달을 보여 주는 것을 알아챌 수 있게 합니다.
+  function monthSyncNote() {
+    var bv = budgetView();
+    var today = todayISO().slice(0, 7);
+    if (!bv.month || bv.month === today) return '';
+    return '<p class="mnote">예산 시트의 기준 월은 <b>' + esc(monthLabel(bv.month)) +
+      '</b>인데 오늘은 <b>' + esc(monthLabel(today)) +
+      '</b>이에요. 홈 숫자는 기준 월을 따릅니다 — 예산 탭 B2를 확인해 주세요.</p>';
+  }
+
   function realPartHTML(icon, label, amount) {
     return '<div class="real__part"><dt>' +
       (icon ? '<span class="real__ico">' + icon + '</span>' : '') +
@@ -756,14 +805,29 @@
     var a = actualView();
     var html = '<section class="real">';
     html += '<div class="real__head"><h2 class="real__label">' + esc(monthLabelShort(a.month)) + ' 실지출</h2>' +
-      '<span class="real__flag">#충전 제외</span></div>';
+      '<span class="real__flag">#충전·#저축 제외</span></div>';
     html += '<p class="real__amount num">' + money(a.total) + '</p>';
     html += '<p class="real__sub">생활비 + 결혼준비 + 별도지출 = 실제로 나간 돈</p>';
+
+    // 새 달처럼 거래가 한 건도 없는 달은 0원짜리 카드 대신 안내만 보여 줍니다.
+    if (!a.total && !a.savings && !a.income) {
+      html += '<p class="real__empty">' + esc(monthLabel(a.month)) +
+        '에는 아직 기록이 없어요. 입력 탭에서 첫 거래를 추가하면 여기에 실제로 나간 돈이 표시됩니다.</p>';
+      html += '</section>';
+      return html;
+    }
+
     html += '<dl class="real__parts">';
     html += realPartHTML('', '생활비', a.living);
     html += realPartHTML('💍', '결혼준비', a.wedding);
     html += realPartHTML('🧾', '별도지출', a.separate);
     html += '</dl>';
+
+    // 저축 이체는 실지출에는 안 들어가지만, 통장에서 돈이 빠져나간 사실은 보여 줍니다.
+    if (a.savings) {
+      html += '<p class="real__sav">🏦 저축 이체 <b class="num">' + money(a.savings) +
+        '</b> · 쓴 돈이 아니라서 실지출에서 뺐어요</p>';
+    }
 
     if (a.net === null) {
       html += '<div class="real__net">' +
@@ -784,7 +848,7 @@
       ? '예산 ' + money(bv.budget) + '은 생활비만 봅니다. 결혼준비·별도지출은 예산 밖에서 나간 돈이에요.'
       : '예산은 생활비만 봅니다. 결혼준비·별도지출은 예산 밖에서 나간 돈이에요.';
     html += '<p class="real__note">' + esc(budgetNote) +
-      '<br>#충전은 페이 잔액으로 옮긴 돈이라 빼고 셉니다.</p>';
+      '<br>#충전은 페이 잔액으로, #저축·#적금은 내 계좌로 옮긴 돈이라 실지출에서 뺍니다.</p>';
     html += '</section>';
     return html;
   }
@@ -817,9 +881,10 @@
     var isIn = t.type === '입금';
     var w = isWeddingTx(t);
     var sep = isSeparateTx(t);
+    var sav = isSavingsTx(t);
     var row = Number(t.row);
-    // 별도지출 · 충전은 앱에서 고치면 #제외 태그가 지워져 생활비(지출)로 잡히므로 시트에서 직접 고칩니다.
-    var tappable = isFinite(row) && row >= 2 && !sep && !isChargeTx(t);
+    // 별도지출 · 충전 · 저축 이체는 앱에서 고치면 #제외·#저축 태그가 지워져 생활비(지출)로 잡히므로 시트에서 직접 고칩니다.
+    var tappable = isFinite(row) && row >= 2 && !sep && !isChargeTx(t) && !sav;
     // opts.date — 날짜 묶음(daygroup)이 없는 목록에서 행마다 날짜를 붙입니다.
     var dateText = opts.date ? shortDate(t.date) : '';
     var meta = [];
@@ -839,10 +904,11 @@
     else if (noteText) meta.push(esc(noteText));
 
     var tagHTML = w ? '<span class="tx__tag">결혼</span>'
-      : (sep ? '<span class="tx__tag tx__tag--sep">별도</span>' : '');
+      : (sep ? '<span class="tx__tag tx__tag--sep">별도</span>'
+        : (sav ? '<span class="tx__tag tx__tag--sav">저축</span>' : ''));
 
     var inner =
-      '<div class="tx__icon">' + (w ? '💍' : (sep ? '🧾' : (CAT_ICON[t.category] || '🧾'))) + '</div>' +
+      '<div class="tx__icon">' + (w ? '💍' : (sep ? '🧾' : (sav ? '🏦' : (CAT_ICON[t.category] || '🧾')))) + '</div>' +
       '<div class="tx__body">' +
       '<div class="tx__name">' + tagHTML + esc(t.merchant || '이름 없음') + '</div>' +
       '<div class="tx__meta">' + meta.join(' · ') + '</div>' +
@@ -914,12 +980,13 @@
     return out;
   }
 
-  // 월 칩 이름 — 올해는 '11월', 다른 해는 '25년 12월'
-  function monthChipLabel(ym) {
+  // 월 칩 이름 — 올해는 '11월', 다른 해는 '26년 12월'. 여러 해가 섞이면 모든 칩에 연도를 붙입니다.
+  function monthChipLabel(ym, forceYear) {
     var m = String(ym || '').match(/^(\d{4})-(\d{2})$/);
     if (!m) return String(ym || '');
     var y = Number(m[1]), mm = Number(m[2]);
-    return y === new Date().getFullYear() ? mm + '월' : String(y).slice(2) + '년 ' + mm + '월';
+    if (!forceYear && y === new Date().getFullYear()) return mm + '월';
+    return String(y).slice(2) + '년 ' + mm + '월';
   }
 
   function listChipsHTML() {
@@ -928,12 +995,14 @@
 
     // 월별 필터 — '모든 달'이 기본(기존 동작 그대로)
     if (months.length > 1) {
+      // 연도가 섞이면(26년 12월 · 27년 1월) 칩마다 연도를 붙여 한눈에 구분되게 합니다.
+      var multiYear = months.some(function (ym) { return ym.slice(0, 4) !== months[0].slice(0, 4); });
       html += '<div class="chips chips--scroll" style="margin-bottom:8px" id="monthChips">';
       html += '<button class="chip' + (!state.filter.month ? ' is-on' : '') +
         '" type="button" data-month="">모든 달</button>';
       months.forEach(function (ym) {
         html += '<button class="chip' + (state.filter.month === ym ? ' is-on' : '') +
-          '" type="button" data-month="' + esc(ym) + '">' + esc(monthChipLabel(ym)) + '</button>';
+          '" type="button" data-month="' + esc(ym) + '">' + esc(monthChipLabel(ym, multiYear)) + '</button>';
       });
       html += '</div>';
     }
@@ -1487,9 +1556,13 @@
     return String(note == null ? '' : note)
       .replace(/#결혼준비/g, ' ')
       .replace(/#제외/g, ' ')
+      .replace(/#저축/g, ' ')
+      .replace(/#적금/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
       .replace(/^[·,\-:;|]+ ?/, '')
+      .replace(/[·,\-:;|]+$/, '')
+      .replace(/(?:·\s*){2,}/g, '· ') // 가운데 태그만 지우고 남은 '· ·' 정리
       .replace(/[·,\-:;|]+$/, '')
       .trim();
   }
@@ -1998,15 +2071,23 @@
     isWeddingTx: isWeddingTx,
     isSeparateTx: isSeparateTx,
     isChargeTx: isChargeTx,
+    isSavingsTx: isSavingsTx,
     isExcludedTx: isExcludedTx,
     noteTags: noteTags,
+    stripWeddingNote: stripWeddingNote,
     deriveSeparate: deriveSeparate,
     separateView: separateView,
+    savingsView: savingsView,
     monthSum: monthSum,
     actualView: actualView,
     noteBalance: noteBalance,
     balanceView: balanceView,
     balanceHTML: balanceHTML,
+    todayISO: todayISO,
+    monthLabel: monthLabel,
+    monthLabelShort: monthLabelShort,
+    dayLabel: dayLabel,
+    monthSyncNote: monthSyncNote,
     txMonths: txMonths,
     monthChipLabel: monthChipLabel,
     txMatches: txMatches,

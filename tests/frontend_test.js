@@ -408,7 +408,7 @@ check('홈: 실지출 카드에 총액과 구성 3가지가 한눈에 나온다'
   has(html, '₩680,788');
   has(html, '₩2,150,000');
   has(html, '₩640,080');
-  has(html, '#충전 제외');
+  has(html, '#충전·#저축 제외');
   has(html, 'real__part', '구성 행');
 });
 
@@ -626,6 +626,250 @@ check('내역: 검색어 + 월 + 카테고리가 동시에 걸린다', function 
   PL.state.filter = { q: '주차', cat: '교통/차량', wedding: 'exclude', month: '2026-10' };
   hasNot(PL.views.listResults(), '전북대학교 주차장');
   PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  PL.state.data = saved;
+});
+
+/* ── 11. 저축 이체(#저축 · #적금) 제외 ─────────────────────────────────── */
+/* 실제 시트1 125행 (2026-11-20 20:33 청년희망적금 이체 500,000원) */
+var SAVINGS = {
+  row: 125, date: '2026-11-20', time: '20:33', merchant: '청년희망적금 (계좌 507803041146)', type: '출금',
+  amount: 500000, method: 'KB국민(507802-**-***249)', category: '금융/보험',
+  note: '청년희망적금 이체 · #저축 #제외 · 잔액 3,892,019원', mailId: '1a1f8bbc29111af1'
+};
+var JAN_COFFEE = {
+  row: 127, date: '2027-01-02', time: '09:12', merchant: '메가커피 전주점', type: '출금',
+  amount: 2000, method: 'KB국민', category: '카페/간식', note: '잔액 3,889,369원', mailId: ''
+};
+var DEC_LUNCH = {
+  row: 128, date: '2026-12-31', time: '12:40', merchant: '국밥집', type: '출금',
+  amount: 9000, method: '국민계좌', category: '식사', note: '', mailId: ''
+};
+
+check("isSavingsTx: '#저축' · '#적금' 태그를 저축 이체로 본다", function () {
+  eq(PL.isSavingsTx(SAVINGS), true);
+  eq(PL.isSavingsTx({ note: '적금 납입 #적금' }), true);
+  eq(PL.isSavingsTx({ note: '#저축' }), true);
+  eq(PL.isSavingsTx(GROCERY), false);
+  eq(PL.isSavingsTx(null), false);
+  eq(PL.isSavingsTx({}), false);
+});
+
+check('isSavingsTx: 사용처 이름의 "적금" 글자는 저축 태그로 오인하지 않는다', function () {
+  eq(PL.isSavingsTx({ merchant: '청년희망적금 (계좌 507803041146)', note: '잔액 3,892,019원' }), false);
+  eq(PL.isSavingsTx({ note: '청년희망적금 이체' }), false, '태그(#)가 없으면 일반 지출');
+});
+
+check("isExcludedTx: '#저축' 만 있고 '#제외' 가 없어도 생활비에서 빠진다", function () {
+  eq(PL.isExcludedTx({ note: '청년희망적금 이체 #저축' }), true);
+  eq(PL.isExcludedTx({ note: '적금 만기 #적금' }), true);
+  eq(PL.isExcludedTx(SAVINGS), true);
+  eq(PL.isExcludedTx(GROCERY), false);
+});
+
+check("isSeparateTx: '#저축 #제외' 는 별도지출이 아니다 (#충전 과 같은 처리)", function () {
+  eq(PL.isSeparateTx(SAVINGS), false);
+  eq(PL.isSeparateTx({ note: '#적금 #제외' }), false);
+  eq(PL.isSeparateTx({ note: '#저축 #제외', type: '입금' }), false);
+});
+
+check('deriveSeparate: 저축 이체 500,000원은 별도지출 합계에서 빠진다', function () {
+  var out = PL.deriveSeparate([INSURANCE, WEDDING, GROCERY, SAVINGS, KAKAO_CHARGE]);
+  eq(out.summary, { spend: 640080, refund: 0, net: 640080, count: 1 });
+  eq(out.rows.map(function (t) { return t.row; }), [116]);
+});
+
+check('monthSum: 저축 이체는 출금·입금 어느 쪽에도 더하지 않는다', function () {
+  eq(PL.monthSum([SAVINGS, PARKING], '2026-11'), { spend: 650, refund: 0, net: 650, count: 1 });
+  eq(PL.monthSum([{ date: '2026-11-21', type: '입금', amount: 1000000, note: '적금 만기 #적금' }], '2026-11'),
+    { spend: 0, refund: 0, net: 0, count: 0 }, '적금 해지금도 수입으로 보지 않음');
+});
+
+check('actualView: 저축 이체 500,000원은 실지출에 들어가지 않는다', function () {
+  var saved = PL.state.data;
+  PL.state.data = {
+    budget: saved.budget, monthly: saved.monthly, wedding: saved.wedding,
+    transactions: saved.transactions.concat([SAVINGS])
+  };
+  var a = PL.actualView();
+  eq(a.total, 3470868, '저축이 더해지면 3,970,868 이 된다');
+  eq(a.savings, 500000, '저축 이체는 따로 보여 줌');
+  eq(a.savingsCount, 1);
+  eq(a.net, -612546, '순현금도 저축 이체 때문에 줄지 않음');
+  PL.state.data = saved;
+});
+
+check('actualView: 다른 달 저축 이체는 이번 달 합계에 섞이지 않는다', function () {
+  var saved = PL.state.data;
+  PL.state.data = {
+    budget: saved.budget, monthly: saved.monthly, wedding: saved.wedding,
+    transactions: saved.transactions.concat([
+      { date: '2026-10-20', type: '출금', amount: 700000, note: '청년희망적금 #저축 #제외' }
+    ])
+  };
+  eq(PL.actualView().savings, 0);
+  PL.state.data = saved;
+});
+
+check("txMatches: 저축 이체는 '생활비만'·'별도만'에서 빠지고 '전체'에서만 보인다", function () {
+  var ALL6 = [INSURANCE, WEDDING, GROCERY, SAVINGS];
+  function pick(f) { return ALL6.filter(function (t) { return PL.txMatches(t, f); }).map(function (t) { return t.row; }); }
+  eq(pick({ wedding: 'exclude' }), [114]);
+  eq(pick({ wedding: 'sep' }), [116]);
+  eq(pick({ wedding: 'all' }), [116, 115, 114, 125]);
+});
+
+check('내역: 저축 행에는 "저축" 배지가 붙고 앱에서는 수정할 수 없다', function () {
+  var saved = PL.state.data;
+  PL.state.data = { transactions: [GROCERY, SAVINGS] };
+  PL.state.filter = { q: '', cat: '', wedding: 'all', month: '' };
+  var html = PL.views.list();
+  has(html, 'tx__tag--sav');
+  has(html, '청년희망적금');
+  hasNot(html, 'data-txrow="125"', '저축 행에 수정 버튼이 붙으면 #저축 태그가 지워짐');
+  has(html, 'data-txrow="114"', '보통 지출은 그대로 수정 가능');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  PL.state.data = saved;
+});
+
+check('홈: 이번 달 저축 이체를 실지출과 구분해 보여 준다', function () {
+  var saved = PL.state.data;
+  PL.state.data = {
+    budget: saved.budget, monthly: saved.monthly, wedding: saved.wedding,
+    transactions: saved.transactions.concat([SAVINGS])
+  };
+  var html = PL.views.home();
+  has(html, '저축 이체');
+  has(html, '₩500,000');
+  has(html, '실지출에서 뺐어요');
+  has(html, '₩3,470,868', '실지출 총액은 그대로');
+  PL.state.data = saved;
+});
+
+check('stripWeddingNote: 태그를 지우고 가운데 남은 구분자도 정리한다', function () {
+  eq(PL.stripWeddingNote(SAVINGS.note), '청년희망적금 이체 · 잔액 3,892,019원');
+  eq(PL.stripWeddingNote('드레스 · #결혼준비 #제외'), '드레스');
+  eq(PL.stripWeddingNote(''), '');
+  eq(PL.stripWeddingNote(null), '');
+});
+
+/* ── 12. 2027년 연도 전환 ───────────────────────────────────────────────── */
+check('monthLabelShort: 다른 해는 연도를 붙이고 1월을 01월 로 쓰지 않는다', function () {
+  eq(PL.monthLabelShort('2026-11'), '11월');
+  eq(PL.monthLabelShort('2026-12'), '12월', '올해 12월은 연도 없이');
+  eq(PL.monthLabelShort('2027-01'), '27년 1월');
+  eq(PL.monthLabelShort('2025-12'), '25년 12월');
+  eq(PL.monthLabelShort(''), '');
+});
+
+check('shortDate: 다른 해 날짜에는 연도를 붙인다', function () {
+  eq(PL.shortDate('2026-11-16'), '11/16');
+  eq(PL.shortDate('2027-01-05'), '27/1/5');
+  eq(PL.shortDate('2025-12-31'), '25/12/31');
+});
+
+check('dayLabel: 다른 해 날짜는 연도를 붙이고 올해는 붙이지 않는다', function () {
+  has(PL.dayLabel('2026-11-16'), '11월 16일');
+  hasNot(PL.dayLabel('2026-11-16'), '26년');
+  has(PL.dayLabel('2027-01-05'), '27년 1월 5일');
+  has(PL.dayLabel('2025-12-31'), '25년 12월 31일');
+});
+
+check('monthChipLabel: 여러 해가 섞이면 모든 칩에 연도를 붙인다', function () {
+  eq(PL.monthChipLabel('2026-11'), '11월');
+  eq(PL.monthChipLabel('2026-11', true), '26년 11월');
+  eq(PL.monthChipLabel('2027-01'), '27년 1월');
+  eq(PL.monthChipLabel('2027-01', true), '27년 1월');
+  eq(PL.monthChipLabel('bad'), 'bad');
+});
+
+check('내역: 26년 12월 · 27년 1월이 같이 있으면 두 칩에 연도가 보인다', function () {
+  var saved = PL.state.data;
+  PL.state.data = { transactions: [DEC_LUNCH, JAN_COFFEE, PARKING] };
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  var html = PL.views.list();
+  has(html, '>26년 12월<');
+  has(html, '>27년 1월<');
+  has(html, '>26년 11월<', '올해 칩도 연도를 붙여 섞이지 않게');
+  has(html, 'data-month="2027-01"');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  PL.state.data = saved;
+});
+
+check('내역: 한 해만 있으면 기존처럼 월만 보여 준다', function () {
+  var saved = PL.state.data;
+  PL.state.data = { transactions: [OCT_LUNCH, PARKING] };
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  var html = PL.views.list();
+  has(html, '>11월<');
+  hasNot(html, '>26년 11월<');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  PL.state.data = saved;
+});
+
+check('내역: 연도가 바끈 달의 홈·필터가 서로 섞이지 않는다', function () {
+  var saved = PL.state.data;
+  PL.state.data = { transactions: [DEC_LUNCH, JAN_COFFEE] };
+  PL.state.filter = { q: '', cat: '', wedding: 'all', month: '2027-01' };
+  var frag = PL.views.listResults();
+  has(frag, '메가커피');
+  hasNot(frag, '국밥집');
+  has(frag, '2027년 1월 · 1건');
+  PL.state.filter = { q: '', cat: '', wedding: 'all', month: '2026-12' };
+  has(PL.views.listResults(), '국밥집');
+  PL.state.filter = { q: '', cat: '', wedding: 'exclude', month: '' };
+  PL.state.data = saved;
+});
+
+check('홈: 2027년 1월처럼 거래가 0건인 새 달은 안내 문구로 바뀌고 깨지지 않는다', function () {
+  var saved = PL.state.data;
+  PL.state.data = {
+    period: { month: '2027-01', daysLeft: 31 },
+    budget: { period: { month: '2027-01', daysLeft: 31 }, rows: [], total: { budget: 1310000, spent: 0 } },
+    monthly: [{ month: '2026-11', income: 2858322 }],
+    wedding: { summary: saved.wedding.summary, rows: saved.wedding.rows },
+    transactions: [PARKING, SAVINGS]
+  };
+  var a = PL.actualView();
+  eq(a.month, '2027-01');
+  eq(a.total, 0, '지난달 거래는 새 달 실지출에 더하지 않는다');
+  eq(a.savings, 0);
+  var html = PL.views.home();
+  has(html, '2027년 1월 생활비');
+  has(html, '2027년 1월에는 아직 기록이 없어요');
+  hasNot(html, 'real__net', '0건인 달에 순현금 − 로 깨지지 않음');
+  has(html, '₩1,310,000', '예산은 그대로 보임');
+  PL.state.data = saved;
+});
+
+check('홈: 예산 기준 월이 2027-01 이면 제목도 27년 1월로 붙는다', function () {
+  var saved = PL.state.data;
+  PL.state.data = {
+    period: { month: '2027-01', daysLeft: 10 },
+    budget: { period: { month: '2027-01', daysLeft: 10 }, rows: [], total: { budget: 1310000, spent: 120000 } },
+    monthly: [{ month: '2027-01', income: 2858322 }],
+    wedding: { summary: { spend: 0, refund: 0, net: 0, count: 0 }, rows: [] },
+    transactions: [JAN_COFFEE]
+  };
+  var html = PL.views.home();
+  has(html, '27년 1월 실지출');
+  has(html, '2027년 1월 생활비');
+  PL.state.data = saved;
+});
+
+check('monthSyncNote: 기준 월과 오늘 달이 다를 때만 안내한다', function () {
+  var saved = PL.state.data;
+  var today = PL.todayISO().slice(0, 7);
+  PL.state.data = {
+    budget: { period: { month: today, daysLeft: 5 }, rows: [], total: { budget: 100, spent: 0 } },
+    monthly: [], wedding: { rows: [] }, transactions: []
+  };
+  eq(PL.monthSyncNote(), '', '같은 달이면 안내 없음');
+  PL.state.data = {
+    budget: { period: { month: '2027-01', daysLeft: 5 }, rows: [], total: { budget: 100, spent: 0 } },
+    monthly: [], wedding: { rows: [] }, transactions: []
+  };
+  has(PL.monthSyncNote(), '예산 시트의 기준 월');
+  has(PL.monthSyncNote(), '2027년 1월');
   PL.state.data = saved;
 });
 

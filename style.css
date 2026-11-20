@@ -285,6 +285,19 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .real__net.is-plus .real__net-v { color: var(--blue-dark); }
 .real__warn { margin-top: 9px; font-size: 11.5px; font-weight: 700; color: #C4273A; line-height: 1.5; }
 .real__note { margin-top: 9px; font-size: 11px; font-weight: 600; color: var(--ink-3); line-height: 1.55; }
+.real__sav {
+  margin-top: 9px; padding: 7px 10px; border-radius: 10px; background: var(--green-soft);
+  font-size: 11.5px; font-weight: 700; color: #0B7F58; line-height: 1.45;
+}
+.real__sav b { font-weight: 800; }
+.real__empty { margin-top: 9px; font-size: 11.5px; font-weight: 600; color: var(--ink-3); line-height: 1.55; }
+
+/* 예산 시트의 기준 월과 오늘 달이 다를 때 (해 넘어갈 때 착시 방지) */
+.mnote {
+  margin: -2px 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--amber-soft);
+  font-size: 11.5px; font-weight: 600; color: #8A5A00; line-height: 1.5;
+}
+.mnote b { font-weight: 800; }
 
 /* ── 예산 진행 리스트 ────────────────────────────────────────────────────── */
 .bud { padding: 4px 0; }
@@ -330,6 +343,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
   border-radius: 5px; background: var(--pink-soft); color: var(--pink); margin-right: 4px;
 }
 .tx__tag--sep { background: var(--amber-soft); color: var(--amber); }
+.tx__tag--sav { background: var(--green-soft); color: var(--green); }
 .tx__amt { flex: 0 0 auto; text-align: right; font-size: 15px; font-weight: 800; letter-spacing: -.02em; }
 .tx__amt--in { color: var(--blue); }
 .tx__amt small { display: block; font-size: 10.5px; font-weight: 700; color: var(--ink-3); letter-spacing: 0; }
