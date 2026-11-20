@@ -248,8 +248,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
   font-size: 10.5px; font-weight: 800; color: var(--ink-3); letter-spacing: -.01em;
 }
 .bal__amount { font-size: 27px; font-weight: 800; letter-spacing: -.045em; line-height: 1.12; margin-top: 5px; color: var(--ink); }
-.bal__sub { font-size: 11px; font-weight: 700; color: var(--ink-3); margin-top: 3px; }
-.bal__hint { font-size: 10.5px; font-weight: 600; color: #A6AEB9; margin-top: 6px; line-height: 1.5; }
+.bal__sub { font-size: 11px; font-weight: 700; color: var(--ink-3); margin-top: 3px; word-break: keep-all; }
+.bal__hint { font-size: 10.5px; font-weight: 600; color: #A6AEB9; margin-top: 6px; line-height: 1.5; word-break: keep-all; }
 
 /* ── 홈 · 이번 달 실지출(생활비 + 결혼준비 + 별도지출) ─────────────────── */
 .real {

@@ -176,7 +176,7 @@ KB 결제 알림 메일로 자동 기록한 행은 비고(H열)에 결제 직후
 
 ## 참고
 
-- `index.html` 의 `app.js?v=7` · `style.css?v=7` 는 GitHub Pages 의 10분 캐시 때문에 붙여 둔 버전입니다.
+- `index.html` 의 `app.js?v=8` · `style.css?v=8` 는 GitHub Pages 의 10분 캐시 때문에 붙여 둔 버전입니다.
   app.js/style.css 를 고칠 때 이 번호를 올리고 `sw.js` 의 `CACHE` 이름도 같이 올리면 폰에서 바로 반영됩니다.
 
 - 내역 탭 검색창은 `type="text"` + `#listResults` 부분 갱신입니다. 입력할 때마다 화면 전체를
