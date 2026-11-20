@@ -737,9 +737,9 @@
       '<span class="bal__when num">' + esc(when) + '</span></div>';
     html += '<p class="bal__amount num">' + money(b.amount) + '</p>';
     html += '<p class="bal__sub">' +
-      esc(b.method ? b.method + ' 결제 알림에 적힌 계좌 잔액' : '결제 알림에 적힌 계좌 잔액') + '</p>';
-    html += '<p class="bal__hint">이번 달 순현금과 달리 지금 통장에 남은 돈이에요. ' +
-      '마지막 결제 뒤 입출금은 반영 전일 수 있어요.</p>';
+      esc(b.method ? b.method + ' 결제 알림의 계좌 잔액' : '결제 알림의 계좌 잔액') +
+      ' · 그 뒤 입출금은 반영 전</p>';
+    html += '<p class="bal__hint">이번 달 순현금과 달리, 지금 통장에 남은 돈이에요.</p>';
     html += '</section>';
     return html;
   }
