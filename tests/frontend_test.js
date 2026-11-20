@@ -838,6 +838,7 @@ check('홈: 2027년 1월처럼 거래가 0건인 새 달은 안내 문구로 바
   has(html, '2027년 1월에는 아직 기록이 없어요');
   hasNot(html, 'real__net', '0건인 달에 순현금 − 로 깨지지 않음');
   has(html, '₩1,310,000', '예산은 그대로 보임');
+  has(html, '이번 달 수입</dt><dd class="num">—</dd>', '수입이 0인 새 달은 — 로');
   PL.state.data = saved;
 });
 

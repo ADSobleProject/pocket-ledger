@@ -719,7 +719,7 @@
     html += '<div class="hero__chip"><dt>하루 가용액</dt><dd class="num">' +
       (bv.remaining > 0 && bv.daysLeft > 0 ? money(bv.daily) : '—') + '</dd></div>';
     html += '<div class="hero__chip"><dt>이번 달 수입</dt><dd class="num">' +
-      (cur ? money(cur.income) : '—') + '</dd></div>';
+      (cur && n(cur.income) > 0 ? money(cur.income) : '—') + '</dd></div>';
     html += '</dl>';
     html += '</section>';
 
